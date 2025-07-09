@@ -52,10 +52,10 @@ ADMIN_EMAIL="odoo@example.com"
 ## https://www.odoo.com/documentation/16.0/administration/install.html
 
 # Check if the operating system is Ubuntu 22.04
-if [[ $(lsb_release -r -s) == "22.04" ]]; then
-    WKHTMLTOX_X64="https://packages.ubuntu.com/jammy/wkhtmltopdf"
-    WKHTMLTOX_X32="https://packages.ubuntu.com/jammy/wkhtmltopdf"
-    #No Same link works for both 64 and 32-bit on Ubuntu 22.04
+if [[ $(lsb_release -r -s) == "22.04" || $(lsb_release -r -s) == "23.04" || $(lsb_release -r -s) == "23.10" || $(lsb_release -r -s) == "24.04" ]]; then
+  # Use manually downloaded .deb from GitHub because system packages don't support Qt WebKit rendering
+    WKHTMLTOX_X64="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.stretch_amd64.deb"
+    WKHTMLTOX_X32="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.stretch_i386.deb"
 else
     # For older versions of Ubuntu
     WKHTMLTOX_X64="https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.5/wkhtmltox_0.12.5-1.$(lsb_release -c -s)_amd64.deb"
@@ -67,12 +67,19 @@ fi
 #--------------------------------------------------
 echo -e "\n---- Update Server ----"
 # universe package is for Ubuntu 18.x
-sudo add-apt-repository universe
-# libpng12-0 dependency for wkhtmltopdf for older Ubuntu versions
-sudo add-apt-repository "deb http://mirrors.kernel.org/ubuntu/ xenial main"
-sudo apt-get update
-sudo apt-get upgrade -y
-sudo apt-get install libpq-dev
+sudo add-apt-repository -y universe
+# libpng12-0 dependency for wkhtmltopdf for older Ubuntu versions is only available in Xenial.
+# Xenial repositories are end-of-life and should not be used in production.
+# Warning: adding Xenial repositories can cause conflicts with newer packages and result to errors in apt-get.
+if (( $(echo "$OE_VERSION < 13.0" | bc -l) )); then
+  echo "Adding Xenial repo for legacy Odoo version $OE_VERSION"
+  sudo add-apt-repository -y "deb http://mirrors.kernel.org/ubuntu/ xenial main"
+  # Manually setting GPG keys for the Xenial repository is required
+  sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 40976EAF437D05B5
+  sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
+fi
+sudo apt-get update && sudo apt-get upgrade -y
+sudo apt-get install -y libpq-dev bc
 
 #--------------------------------------------------
 # Install PostgreSQL Server
@@ -83,10 +90,10 @@ if [ $INSTALL_POSTGRESQL_FOURTEEN = "True" ]; then
     sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc|sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
     sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
     sudo apt-get update
-    sudo apt-get install postgresql-14
+    sudo apt-get install -y postgresql-14
 else
     echo -e "\n---- Installing the default postgreSQL version based on Linux version ----"
-    sudo apt-get install postgresql postgresql-server-dev-all -y
+    sudo apt-get install -y postgresql postgresql-server-dev-all
 fi
 
 
@@ -96,12 +103,26 @@ sudo su - postgres -c "createuser -s $OE_USER" 2> /dev/null || true
 #--------------------------------------------------
 # Install Dependencies
 #--------------------------------------------------
+echo "---- Ensuring server timezone data is up-to-date ----"
+sudo apt-get install -y locales libc6 tzdata util-linux
+sudo dpkg-reconfigure --frontend noninteractive tzdata
+
 echo -e "\n--- Installing Python 3 + pip3 --"
-sudo apt-get install python3 python3-pip
-sudo apt-get install git python3-cffi build-essential wget python3-dev python3-venv python3-wheel libxslt-dev libzip-dev libldap2-dev libsasl2-dev python3-setuptools node-less libpng-dev libjpeg-dev gdebi -y
+
+sudo apt-get install -y python3 python3-pip 
+sudo apt-get install -y git python3-cffi build-essential wget python3-dev python3-venv python3-wheel plocate
+sudo apt-get install -y libxslt-dev libzip-dev libldap2-dev libsasl2-dev python3-setuptools node-less              
+sudo apt-get install -y libpng-dev libjpeg-dev gdebi
 
 echo -e "\n---- Install python packages/requirements ----"
-sudo -H pip3 install -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+# Remove possibly system installed idna package and relying on pip installed to avoid conflict with python3-idna
+#  On some Debian/Ubuntu systems, pip may be unable to uninstall idna (e.g. version 3.6) due to missing RECORD files.
+# This may cause requirement installation to fail unless --break-system-packages is used or the offending package 
+# is manually removed.
+sudo apt-get remove -y python3-idna || true
+
+# Python 3 externally-managed-environment requires break flag use
+sudo -H pip3 install --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
 
 echo -e "\n---- Installing nodeJS NPM and rtlcss for LTR support ----"
 sudo apt-get install nodejs npm -y
@@ -122,11 +143,14 @@ if [ $INSTALL_WKHTMLTOPDF = "True" ]; then
   
 
   if [[ $(lsb_release -r -s) == "22.04" ]]; then
-    # Ubuntu 22.04 LTS
-    sudo apt install wkhtmltopdf -y
+    # Ubuntu 22.04 LTS needs a specific Stretch package of wkhtmltopdf
+    wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.stretch_amd64.deb
+    sudo apt install -y libjpeg62-turbo
+    sudo gdebi -n wkhtmltox_0.12.6-1.stretch_amd64.deb
+
   else
       # For older versions of Ubuntu
-    sudo gdebi --n `basename $_url`
+    sudo DEBIAN_FRONTEND=noninteractive gdebi -n `basename $_url`
   fi
   
   sudo ln -s /usr/local/bin/wkhtmltopdf /usr/bin
@@ -194,10 +218,11 @@ if [ $GENERATE_RANDOM_PASSWORD = "True" ]; then
     OE_SUPERADMIN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)
 fi
 sudo su root -c "printf 'admin_passwd = ${OE_SUPERADMIN}\n' >> /etc/${OE_CONFIG}.conf"
-if [ $OE_VERSION > "11.0" ];then
-    sudo su root -c "printf 'http_port = ${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
+
+if [ "$(echo "$OE_VERSION > 11.0" | bc -l)" -eq 1 ]; then
+  sudo su root -c "printf 'http_port = ${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
 else
-    sudo su root -c "printf 'xmlrpc_port = ${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
+  sudo su root -c "printf 'xmlrpc_port = ${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
 fi
 sudo su root -c "printf 'logfile = /var/log/${OE_USER}/${OE_CONFIG}.log\n' >> /etc/${OE_CONFIG}.conf"
 
@@ -211,7 +236,9 @@ sudo chmod 640 /etc/${OE_CONFIG}.conf
 
 echo -e "* Create startup file"
 sudo su root -c "echo '#!/bin/sh' >> $OE_HOME_EXT/start.sh"
-sudo su root -c "echo 'sudo -u $OE_USER $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf' >> $OE_HOME_EXT/start.sh"
+#Verifying longpolling port
+sudo su root -c "echo 'sudo -u $OE_USER $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf --longpolling-port=$LONGPOLLING_PORT' >> $OE_HOME_EXT/start.sh"
+
 sudo chmod 755 $OE_HOME_EXT/start.sh
 
 #--------------------------------------------------
@@ -375,8 +402,13 @@ server {
 EOF
 
   sudo mv ~/odoo /etc/nginx/sites-available/$WEBSITE_NAME
-  sudo ln -s /etc/nginx/sites-available/$WEBSITE_NAME /etc/nginx/sites-enabled/$WEBSITE_NAME
-  sudo rm /etc/nginx/sites-enabled/default
+  
+  # Symbolic link the configuration file to sites-enabled does not support _, thus protected.
+  if [ ! -e "/etc/nginx/sites-enabled/$WEBSITE_NAME" ]; then
+    sudo ln -s /etc/nginx/sites-available/$WEBSITE_NAME /etc/nginx/sites-enabled/$WEBSITE_NAME
+  fi
+  [ -e /etc/nginx/sites-enabled/default ] && sudo rm /etc/nginx/sites-enabled/default
+
   sudo service nginx reload
   sudo su root -c "printf 'proxy_mode = True\n' >> /etc/${OE_CONFIG}.conf"
   echo "Done! The Nginx server is up and running. Configuration can be found at /etc/nginx/sites-available/$WEBSITE_NAME"
@@ -390,25 +422,57 @@ fi
 
 if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != "odoo@example.com" ]  && [ $WEBSITE_NAME != "_" ];then
   sudo apt-get update -y
-  sudo apt install snapd -y
+  sudo apt install -y snapd
   sudo snap install core; snap refresh core
   sudo snap install --classic certbot
-  sudo apt-get install python3-certbot-nginx -y
+  sudo apt-get install -y python3-certbot-nginx
   sudo certbot --nginx -d $WEBSITE_NAME --noninteractive --agree-tos --email $ADMIN_EMAIL --redirect
   sudo service nginx reload
   echo "SSL/HTTPS is enabled!"
 else
   echo "SSL/HTTPS isn't enabled due to choice of the user or because of a misconfiguration!"
-  if $ADMIN_EMAIL = "odoo@example.com";then 
+  if [ $ADMIN_EMAIL = "odoo@example.com" ]; then 
     echo "Certbot does not support registering odoo@example.com. You should use real e-mail address."
   fi
-  if $WEBSITE_NAME = "_";then
+  if [ $WEBSITE_NAME = "_" ]; then
     echo "Website name is set as _. Cannot obtain SSL Certificate for _. You should use real website address."
   fi
 fi
 
 echo -e "* Starting Odoo Service"
 sudo su root -c "/etc/init.d/$OE_CONFIG start"
+echo -e "\n Waiting for Odoo to start and listen listening on port " $OE_PORT
+
+# Wait for Odoo to start and listen on the specified port
+for i in {1..15}; do
+    if sudo lsof -i :$OE_PORT | grep LISTEN >/dev/null; then
+        echo "OK. Odoo is now running and listening on port " $OE_PORT
+        break
+    fi
+    sleep 1
+done
+
+if ! sudo lsof -i :$OE_PORT | grep LISTEN >/dev/null; then
+    echo "ERROR: Odoo is not listening on port $OE_PORT after waiting up to 15 seconds."
+    echo "please check logs at /var/log/${OE_USER}/${OE_CONFIG}.log"
+    exit 1
+fi
+
+if pgrep -f odoo-bin >/dev/null; then
+    echo "Odoo process is running."
+else
+    echo "Warning: Odoo process not found even though port is open."
+fi
+
+if [ -f /var/log/${OE_USER}/${OE_CONFIG}.log ]; then
+  echo -e "\n Latest Odoo log output:"
+  sudo tail -n 20 /var/log/${OE_USER}/${OE_CONFIG}.log
+else
+  echo "ERROR: No log file found at /var/log/${OE_USER}/${OE_CONFIG}.log"
+  exit 1
+fi
+
+
 echo "-----------------------------------------------------------"
 echo "Done! The Odoo server is up and running. Specifications:"
 echo "Port: $OE_PORT"
