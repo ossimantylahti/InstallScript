@@ -19,6 +19,14 @@ OE_HOME="/$OE_USER"
 OE_HOME_EXT="/$OE_USER/${OE_USER}-server"
 # The default port where this Odoo instance will run under (provided you use the command -c in the terminal)
 # Set to true if you want to install it, false if you don't need it or have it already installed.
+
+# Ubuntu environments have made system installed python3 packages very difficutl to manage. Henceforth, we will use a virtual environment for Odoo.
+# This will ensure that Odoo has its own Python environment and does not conflict with system packages
+# This is the default location where the Odoo virtual environment will be created.
+USE_PYTHON_VENV="True"
+# If USE_PYTHON_VENV is True, this is the location of the virtual environment.
+OE_VENV="$OE_HOME/venv"
+
 INSTALL_WKHTMLTOPDF="True"
 # Set the default Odoo port (you still have to use -c /etc/odoo-server.conf for example to use this.)
 OE_PORT="8069"
@@ -96,7 +104,6 @@ else
     sudo apt-get install -y postgresql postgresql-server-dev-all
 fi
 
-
 echo -e "\n---- Creating the ODOO PostgreSQL User  ----"
 sudo su - postgres -c "createuser -s $OE_USER" 2> /dev/null || true
 
@@ -107,32 +114,63 @@ echo "---- Ensuring server timezone data is up-to-date ----"
 sudo apt-get install -y locales libc6 tzdata util-linux
 sudo dpkg-reconfigure --frontend noninteractive tzdata
 
-echo -e "\n--- Installing Python 3 + pip3 --"
+#--------------------------------------------------
+# Ubuntu 22.04 with venv requires home directory ownership
+sudo mkdir -p $OE_HOME
+sudo chown -R odoo:odoo /$OE_HOME
 
-sudo apt-get install -y python3 python3-pip 
+echo -e "\n--- Installing Python with right version --"
+
+# Tarkista ja asenna tarvittaessa Python-versiot
+install_python() {
+  local v=$1
+  if ! command -v python${v} &>/dev/null; then
+    sudo add-apt-repository -y ppa:deadsnakes/ppa
+    sudo apt update
+    sudo apt install -y python${v} python${v}-venv python${v}-dev
+  fi
+}
+
+case "$OE_VERSION" in
+  "16.0")
+    PYTHON_VER="3.9";;
+  "17.0"|"18.0")
+    PYTHON_VER="3.10";;
+  *)
+    echo "Unsupported Odoo version: $OE_VERSION"; exit 1;;
+esac
+
+install_python "${PYTHON_VER}"
+
+if [ "$USE_PYTHON_VENV" = "True" ]; then
+  echo -e "\n---- Creating Python virtual environment at $OE_VENV ----"
+  python${PYTHON_VER} -m venv $OE_VENV
+#  source $OE_VENV/bin/activate
+  echo -e "\nPython version used in venv:"
+  $OE_VENV/bin/python3 --version
+
+  echo -e "\n---- Installing pip requirements in virtual environment ----"
+  $OE_VENV/bin/pip install --upgrade pip
+  $OE_VENV/bin/pip install wheel
+  $OE_VENV/bin/pip install -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+else
+  echo -e "\n---- Installing pip requirements globally ----"
+  sudo -H pip3 install --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+fi
+
 sudo apt-get install -y git python3-cffi build-essential wget python3-dev python3-venv python3-wheel plocate
 sudo apt-get install -y libxslt-dev libzip-dev libldap2-dev libsasl2-dev python3-setuptools node-less              
 sudo apt-get install -y libpng-dev libjpeg-dev gdebi
-
-echo -e "\n---- Install python packages/requirements ----"
-# Remove possibly system installed idna package and relying on pip installed to avoid conflict with python3-idna
-#  On some Debian/Ubuntu systems, pip may be unable to uninstall idna (e.g. version 3.6) due to missing RECORD files.
-# This may cause requirement installation to fail unless --break-system-packages is used or the offending package 
-# is manually removed.
-sudo apt-get remove -y python3-idna || true
-
-# Python 3 externally-managed-environment requires break flag use
-sudo -H pip3 install --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
 
 echo -e "\n---- Installing nodeJS NPM and rtlcss for LTR support ----"
 sudo apt-get install nodejs npm -y
 sudo npm install -g rtlcss
 
 #--------------------------------------------------
-# Install Wkhtmltopdf if needed
+# Install Wkhtmltopdf if user has selected it
 #--------------------------------------------------
 if [ $INSTALL_WKHTMLTOPDF = "True" ]; then
-  echo -e "\n---- Install wkhtml and place shortcuts on correct place for ODOO 13 ----"
+  echo -e "\n---- Install wkhtml and place shortcuts on correct place for Odoo ----"
   #pick up correct one from x64 & x32 versions:
   if [ "`getconf LONG_BIT`" == "64" ];then
       _url=$WKHTMLTOX_X64
@@ -159,7 +197,7 @@ else
   echo "Wkhtmltopdf isn't installed due to the choice of the user!"
 fi
 
-echo -e "\n---- Create ODOO system user ----"
+echo -e "\n---- Create Odoo system user ----"
 sudo adduser --system --quiet --shell=/bin/bash --home=$OE_HOME --gecos 'ODOO' --group $OE_USER
 #The user should also be added to the sudo'ers group.
 sudo adduser $OE_USER sudo
@@ -207,11 +245,10 @@ sudo su $OE_USER -c "mkdir $OE_HOME/custom/addons"
 echo -e "\n---- Setting permissions on home folder ----"
 sudo chown -R $OE_USER:$OE_USER $OE_HOME/*
 
-echo -e "* Create server config file"
-
+echo -e "* Init server config file"
 
 sudo touch /etc/${OE_CONFIG}.conf
-echo -e "* Creating server config file"
+echo -e "* Populating server config file"
 sudo su root -c "printf '[options] \n; This is the password that allows database operations:\n' >> /etc/${OE_CONFIG}.conf"
 if [ $GENERATE_RANDOM_PASSWORD = "True" ]; then
     echo -e "* Generating random admin password"
@@ -237,7 +274,12 @@ sudo chmod 640 /etc/${OE_CONFIG}.conf
 echo -e "* Create startup file"
 sudo su root -c "echo '#!/bin/sh' >> $OE_HOME_EXT/start.sh"
 #Verifying longpolling port
-sudo su root -c "echo 'sudo -u $OE_USER $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf --longpolling-port=$LONGPOLLING_PORT' >> $OE_HOME_EXT/start.sh"
+
+if [ "$USE_PYTHON_VENV" = "True" ]; then
+  sudo su root -c "echo 'sudo -u $OE_USER $OE_VENV/bin/python3 $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf --longpolling-port=$LONGPOLLING_PORT' >> $OE_HOME_EXT/start.sh"
+else
+  sudo su root -c "echo 'sudo -u $OE_USER $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf --longpolling-port=$LONGPOLLING_PORT' >> $OE_HOME_EXT/start.sh"
+fi
 
 sudo chmod 755 $OE_HOME_EXT/start.sh
 
@@ -260,7 +302,18 @@ cat <<EOF > ~/$OE_CONFIG
 # Description: ODOO Business Applications
 ### END INIT INFO
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin
-DAEMON=$OE_HOME_EXT/odoo-bin
+
+# Setting up Python virtual environment if USE_PYTHON_VENV is True
+# Additional options that are passed to the Daemon.
+
+if [ "$USE_PYTHON_VENV" = "True" ]; then
+  DAEMON=$OE_VENV/bin/python3
+  DAEMON_OPTS="$OE_HOME_EXT/odoo-bin -c \$CONFIGFILE"
+else
+  DAEMON=$OE_HOME_EXT/odoo-bin
+  DAEMON_OPTS="-c \$CONFIGFILE"
+fi
+
 NAME=$OE_CONFIG
 DESC=$OE_CONFIG
 # Specify the user name (Default: odoo).
@@ -270,7 +323,6 @@ CONFIGFILE="/etc/${OE_CONFIG}.conf"
 # pidfile
 PIDFILE=/var/run/\${NAME}.pid
 # Additional options that are passed to the Daemon.
-DAEMON_OPTS="-c \$CONFIGFILE"
 [ -x \$DAEMON ] || exit 0
 [ -f \$CONFIGFILE ] || exit 0
 checkpid() {
