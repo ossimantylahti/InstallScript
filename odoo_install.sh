@@ -13,6 +13,13 @@
 # Execute the script to install Odoo:
 # ./odoo-install
 ################################################################################
+LOGFILE="odoo-install.log"
+exec > >(tee -a "$LOGFILE") 2> >(tee -a "$LOGFILE" >&2)
+exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' >> "$LOGFILE") 2>&1
+
+#--------------------------------------------------
+# Variables
+#--------------------------------------------------
 
 OE_USER="odoo"
 OE_HOME="/$OE_USER"
@@ -78,26 +85,30 @@ fi
 #--------------------------------------------------
 echo -e "\n---- Update Server ----"
 # universe package is for Ubuntu 18.x
-sudo add-apt-repository -y universe
+sudo add-apt-repository -y universe 1>/dev/null
 # libpng12-0 dependency for wkhtmltopdf for older Ubuntu versions is only available in Xenial.
 # Xenial repositories are end-of-life and should not be used in production.
 # Warning: adding Xenial repositories can cause conflicts with newer packages and result to errors in apt-get.
 if (( $(echo "$OE_VERSION < 13.0" | bc -l) )); then
   echo "Adding Xenial repo for legacy Odoo version $OE_VERSION"
-  sudo add-apt-repository -y "deb http://mirrors.kernel.org/ubuntu/ xenial main"
+  sudo add-apt-repository -y "deb http://mirrors.kernel.org/ubuntu/ xenial main" 1>/dev/null
   # Manually setting GPG keys for the Xenial repository is required
-  sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 40976EAF437D05B5
-  sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
+  sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 40976EAF437D05B5 1>/dev/null
+  sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32 1>/dev/null
 fi
 sudo apt-get update && sudo apt-get upgrade -y 1>/dev/null
-sudo apt-get install -y libpq-dev bc 1>/dev/null
+#sudo apt-get install -y libpq-dev bc 1>/dev/null
+# Required for building psycopg2 and python-ldap
+sudo apt-get install -y gcc libpq-dev libsasl2-dev libldap2-dev libssl-dev bc 1>/dev/null
+
+
 
 #--------------------------------------------------
 # Install PostgreSQL Server
 #--------------------------------------------------
 echo -e "\n---- Install PostgreSQL Server ----"
 if [ $INSTALL_POSTGRESQL_FOURTEEN = "True" ]; then
-    echo -e "\n---- Installing postgreSQL V14 due to the user it's choise ----"
+    echo -e "\n---- Installing postgreSQL V14 due to the user's choise ----"
     sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc|sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
     sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
     sudo apt-get update 1>/dev/null
@@ -120,6 +131,19 @@ sudo dpkg-reconfigure --frontend noninteractive tzdata
 #--------------------------------------------------
 # Ubuntu 22.04 with venv requires home directory ownership
 sudo mkdir -p $OE_HOME
+#--------------------------------------------------
+# Create user and directories
+#--------------------------------------------------
+
+echo -e "\n---- Create Odoo system user ----"
+sudo adduser --system --quiet --shell=/bin/bash --home=$OE_HOME --gecos 'ODOO' --group $OE_USER
+#The user should also be added to the sudo'ers group.
+sudo adduser $OE_USER sudo
+
+echo -e "\n---- Create Log directory ----"
+sudo mkdir /var/log/$OE_USER
+sudo chown $OE_USER:$OE_USER /var/log/$OE_USER
+
 sudo chown -R odoo:odoo /$OE_HOME
 
 echo -e "\n--- Installing Python with right version --"
@@ -128,7 +152,7 @@ echo -e "\n--- Installing Python with right version --"
 install_python() {
   local v=$1
   if ! command -v python${v} &>/dev/null; then
-    sudo add-apt-repository -y ppa:deadsnakes/ppa
+    sudo add-apt-repository -y ppa:deadsnakes/ppa  1>/dev/null
     sudo apt update 1>/dev/null
     sudo apt install -y python${v} python${v}-venv python${v}-dev 1>/dev/null
   fi
@@ -145,6 +169,10 @@ esac
 
 install_python "${PYTHON_VER}"
 
+for pkg in gcc libpq-dev libsasl2-dev libldap2-dev libssl-dev; do
+    dpkg -s $pkg &> /dev/null || { echo "Missing system packet: $pkg"; exit 1; }
+done
+
 if [ "$USE_PYTHON_VENV" = "True" ]; then
   echo -e "\n---- Creating Python virtual environment at $OE_VENV ----"
   python${PYTHON_VER} -m venv $OE_VENV
@@ -155,7 +183,7 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   echo -e "\n---- Installing pip requirements in virtual environment ----"
   $OE_VENV/bin/pip install --quiet --upgrade pip
   $OE_VENV/bin/pip install --quiet wheel
-  $OE_VENV/bin/pip install -r --quiet https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+  $OE_VENV/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
 else
   echo -e "\n---- Installing pip requirements globally ----"
   sudo -H pip3 install --quiet --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
@@ -180,18 +208,25 @@ if [ $INSTALL_WKHTMLTOPDF = "True" ]; then
   else
       _url=$WKHTMLTOX_X32
   fi
-  sudo wget -q $_url
+  if ! sudo wget -q $_url; then
+    echo "Error: Failed to download $_url"
+    exit 1
+  fi
   
 
   if [[ $(lsb_release -r -s) == "22.04" ]]; then
     # Ubuntu 22.04 LTS needs a specific Stretch package of wkhtmltopdf
-    wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.stretch_amd64.deb
-    sudo apt install -y libjpeg62-turbo 1>/dev/null
+    if ! sudo wget -q https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.stretch_amd64.deb; then
+      echo "Error: Failed to download $_url"
+      exit 1
+    fi
+    # Ubuntu 22.04 LTS requires libjpeg62-turbo for wkhtmltopdf, but that is not available in the default repositories.
+    # Resolution: libjpeg-turbo8 is a drop-in replacement for libjpeg62-turbo.
+    sudo apt install -y libjpeg-turbo8 1>/dev/null
     sudo gdebi -n wkhtmltox_0.12.6-1.stretch_amd64.deb 1>/dev/null
-
   else
       # For older versions of Ubuntu
-    sudo DEBIAN_FRONTEND=noninteractive gdebi -n `basename $_url`
+    sudo DEBIAN_FRONTEND=noninteractive gdebi -n `basename $_url` 1>/dev/null
   fi
   
   sudo ln -s /usr/local/bin/wkhtmltopdf /usr/bin
@@ -200,20 +235,12 @@ else
   echo "Wkhtmltopdf isn't installed due to the choice of the user!"
 fi
 
-echo -e "\n---- Create Odoo system user ----"
-sudo adduser --system --quiet --shell=/bin/bash --home=$OE_HOME --gecos 'ODOO' --group $OE_USER
-#The user should also be added to the sudo'ers group.
-sudo adduser $OE_USER sudo
-
-echo -e "\n---- Create Log directory ----"
-sudo mkdir /var/log/$OE_USER
-sudo chown $OE_USER:$OE_USER /var/log/$OE_USER
 
 #--------------------------------------------------
 # Install ODOO
 #--------------------------------------------------
 echo -e "\n==== Installing ODOO Server ===="
-sudo git clone --depth 1 --branch $OE_VERSION https://www.github.com/odoo/odoo $OE_HOME_EXT/
+sudo git clone --quiet --depth 1 --branch $OE_VERSION https://www.github.com/odoo/odoo $OE_HOME_EXT/
 
 if [ $IS_ENTERPRISE = "True" ]; then
     # Odoo Enterprise install!
@@ -265,6 +292,7 @@ else
   sudo su root -c "printf 'xmlrpc_port = ${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
 fi
 sudo su root -c "printf 'logfile = /var/log/${OE_USER}/${OE_CONFIG}.log\n' >> /etc/${OE_CONFIG}.conf"
+sudo su root -c "printf 'longpolling_port = $LONGPOLLING_PORT\n" >> /etc/${OE_CONFIG}.conf"
 
 if [ $IS_ENTERPRISE = "True" ]; then
     sudo su root -c "printf 'addons_path=${OE_HOME}/enterprise/addons,${OE_HOME_EXT}/addons\n' >> /etc/${OE_CONFIG}.conf"
@@ -500,7 +528,7 @@ sudo su root -c "/etc/init.d/$OE_CONFIG start"
 echo -e "\n Waiting for Odoo to start and listen listening on port " $OE_PORT
 
 # Wait for Odoo to start and listen on the specified port
-for i in {1..15}; do
+for i in {1..5}; do
     if sudo lsof -i :$OE_PORT | grep LISTEN >/dev/null; then
         echo "OK. Odoo is now running and listening on port " $OE_PORT
         break
@@ -509,10 +537,25 @@ for i in {1..15}; do
 done
 
 if ! sudo lsof -i :$OE_PORT | grep LISTEN >/dev/null; then
-    echo "ERROR: Odoo is not listening on port $OE_PORT after waiting up to 15 seconds."
+    echo "ERROR: Odoo is not listening on port $OE_PORT after waiting up to 5 seconds."
     echo "please check logs at /var/log/${OE_USER}/${OE_CONFIG}.log"
     exit 1
 fi
+
+echo -e "\n---- Testing HTTP on longpolling port 8072 ----"
+
+if curl -s --max-time 2 http://localhost:8072 > /dev/null; then
+    echo "HTTP connection to longpolling port 8072 confirmed."
+else
+    echo "ERROR: Longpolling port 8072 is not responding."
+fi
+
+if curl -s --max-time 2 http://localhost:$LONGPOLLING_PORT > /dev/null; then
+    echo "OK. Longpolling port $LONGPOLLING_PORT is responding."
+else
+    echo "ERROR. Longpolling port $LONGPOLLING_PORT does not respond."
+fi
+
 
 if pgrep -f odoo-bin >/dev/null; then
     echo "Odoo process is running."
@@ -528,7 +571,6 @@ else
   echo "ERROR: No log file found at /var/log/${OE_USER}/${OE_CONFIG}.log"
   exit 1
 fi
-
 
 echo "-----------------------------------------------------------"
 echo "Done! The Odoo server is up and running. Specifications:"
