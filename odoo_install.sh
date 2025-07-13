@@ -1,72 +1,85 @@
 #!/bin/bash
 ################################################################################
 # Script for installing Odoo on Ubuntu 16.04, 18.04, 20.04 and 22.04 (could be used for other version too)
-# AuthorS: Yenthe Van Ginneken and Ossi Mantylahti
+# Author: Yenthe Van Ginneken
 #-------------------------------------------------------------------------------
 # This script will install Odoo on your Ubuntu server. It can install multiple Odoo instances
-# in one Ubuntu because of the different xmlrpc_ports
+# in one Ubuntu with different xmlrpc_ports
 #-------------------------------------------------------------------------------
 # Make a new file:
-# sudo nano odoo-install.sh
+#   sudo nano odoo-install.sh
 # Place this content in it and then make the file executable:
-# sudo chmod +x odoo-install.sh
+#   sudo chmod +x odoo-install.sh
 # Execute the script to install Odoo:
-# ./odoo-install
+#   sudo ./odoo-install.sh
 ################################################################################
-LOGFILE="odoo-install.log"
-exec > >(tee -a "$LOGFILE") 2> >(tee -a "$LOGFILE" >&2)
-exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' >> "$LOGFILE") 2>&1
-FULL_LOGFILE_PATH=$(readlink -f "$LOGFILE")
 
 #--------------------------------------------------
-# Variables
+# Begin configuration variables
 #--------------------------------------------------
 
-OE_USER="odoo"
-OE_HOME="/$OE_USER"
-OE_HOME_EXT="/$OE_USER/${OE_USER}-server"
-# The default port where this Odoo instance will run under (provided you use the command -c in the terminal)
-# Set to true if you want to install it, false if you don't need it or have it already installed.
+# Set the odoo server website name
+WEBSITE_NAME="_"
+# Set to true to install and configure nginx, "False" to skip nginx installation
+INSTALL_NGINX="False"
+# Set to "True" to install certbot and have ssl enabled, "False" to use http
+ENABLE_SSL="True"
+# Provide Email to register ssl certificate from certbot
+ADMIN_EMAIL="odoo@example.com"
+# Change to "False" when deploying live. Keep it "True" for testing purposes.
+USE_LETSENCRYPT_STAGING="True"  
 
-# Ubuntu environments have made system installed python3 packages very difficutl to manage. Henceforth, we will use a virtual environment for Odoo.
-# This will ensure that Odoo has its own Python environment and does not conflict with system packages
-# This is the default location where the Odoo virtual environment will be created.
-#
+# Choose the Odoo version which you want to install. For example: 16.0, 15.0, 14.0 or saas-22. 
+OE_VERSION="16.0"
+
+# Select to use Python virtual environment or not. For moden Ubuntus 22.0 and later, this is recommended.
 # Note: for Python Pip installations the script is calling pip as pip3. 
-# For Virtual Environment installations, it will use the pip from the virtual environment. $OE_VENV/bin/pip
+# For Virtual Environment installations, the script will use the pip from the virtual environment. $OE_VENV/bin/pip
 USE_PYTHON_VENV="True"
-# If USE_PYTHON_VENV is True, this is the location of the virtual environment.
-OE_VENV="$OE_HOME/venv"
-
+# Wkhtmltopdf is required for printing PDF reports in Odoo.
 INSTALL_WKHTMLTOPDF="True"
 # Set the default Odoo port (you still have to use -c /etc/odoo-server.conf for example to use this.)
 OE_PORT="8069"
-# Choose the Odoo version which you want to install. For example: 16.0, 15.0, 14.0 or saas-22. When using 'master' the master version will be installed.
-# IMPORTANT! This script contains extra libraries that are specifically needed for Odoo 16.0
-OE_VERSION="16.0"
 # Set this to True if you want to install the Odoo enterprise version!
 IS_ENTERPRISE="False"
 # Installs postgreSQL V14 instead of defaults (e.g V12 for Ubuntu 20/22) - this improves performance
 INSTALL_POSTGRESQL_FOURTEEN="True"
-# Set this to True if you want to install Nginx!
-INSTALL_NGINX="False"
 # Set the superadmin password - if GENERATE_RANDOM_PASSWORD is set to "True" we will automatically generate a random password, otherwise we use this one
 OE_SUPERADMIN="admin"
 # Set to "True" to generate a random password, "False" to use the variable in OE_SUPERADMIN
 GENERATE_RANDOM_PASSWORD="True"
-OE_CONFIG="${OE_USER}-server"
-# Set the website name
-WEBSITE_NAME="_"
 # Set the default Odoo longpolling port (you still have to use -c /etc/odoo-server.conf for example to use this.)
+# Please note that the parameter in Odoo 11.0-15.00 is called longpolling_port. In Odoo 16.0 and later it is called gevent_port.
 LONGPOLLING_PORT="8072"
-# Set to "True" to install certbot and have ssl enabled, "False" to use http
-ENABLE_SSL="True"
-# Provide Email to register ssl certificate
-ADMIN_EMAIL="odoo@example.com"
-#
+#---------------------------------------------------
+# Odoo default users and directories
+OE_USER="odoo"
+OE_CONFIG="${OE_USER}-server"
+OE_HOME="/$OE_USER"
+OE_HOME_EXT="/$OE_USER/${OE_USER}-server"
+OE_VENV="$OE_HOME/venv"
+
 # ---------------------------------------------------
 # END CONFIGURATION VARIABLES
 # ---------------------------------------------------
+
+# Set ANSI colors
+YELLOW='\033[1;33m'
+GREEN='\033[1;32m'
+RED='\033[1;31m'
+BLUE='\033[1;34m'
+NC='\033[0m' # No Color
+# Enable logging
+LOGFILE="odoo-install.log"
+exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' | tee -a "$LOGFILE") 2>&1
+
+
+
+FULL_LOGFILE_PATH=$(readlink -f "$LOGFILE")
+echo -e "${NC}Starting Odoo installation. "
+echo -e "${GREEN}INFO:${NC} Logging enabled. Smart log to console and full to to ${BLUE}$LOGFILE${NC}."
+
+echo -e "${GREEN}-----------------------------------------------------------${NC}\n"
 #
 ##
 ###  WKHTMLTOPDF download links
@@ -75,12 +88,6 @@ ADMIN_EMAIL="odoo@example.com"
 ## https://github.com/odoo/odoo/wiki/Wkhtmltopdf ):
 ## https://www.odoo.com/documentation/16.0/administration/install.html
 
-# ANSI colors
-YELLOW='\033[1;33m'
-GREEN='\033[1;32m'
-RED='\033[1;31m'
-BLUE='\033[1;34m'
-NC='\033[0m' # No Color
 
 # Check if the operating system is Ubuntu 22.04
 if [[ $(lsb_release -r -s) == "22.04" || $(lsb_release -r -s) == "23.04" || $(lsb_release -r -s) == "23.10" || $(lsb_release -r -s) == "24.04" ]]; then
@@ -110,7 +117,7 @@ if (( $(echo "$OE_VERSION < 13.0" | bc -l) )); then
   sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32 1>/dev/null
 fi
 sudo apt-get update && sudo apt-get upgrade -y 1>/dev/null
-#sudo apt-get install -y libpq-dev bc 1>/dev/null
+
 # Required for building psycopg2 and python-ldap
 sudo apt-get install -y gcc libpq-dev libsasl2-dev libldap2-dev libssl-dev bc 1>/dev/null
 echo -e "${GREEN}OK.${NC} Operating system updated successfully."
@@ -121,20 +128,20 @@ echo -e "${GREEN}OK.${NC} Operating system updated successfully."
 #--------------------------------------------------
 echo -e "\n---- Installing PostgreSQL Server ----"
 if [ $INSTALL_POSTGRESQL_FOURTEEN = "True" ]; then
-    echo -e "\n---- Installing postgreSQL V14 due to the user's choise ----"
+    echo -e "\n Proceeding with postgreSQL V14 due to the user's choise ----"
     sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc|sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
     sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
     sudo apt-get update 1>/dev/null
     sudo apt-get install -y postgresql-14 1>/dev/null
 else
-    echo -e "\n---- Installing the default postgreSQL version based on Linux version ----"
+    echo -e "\n Proceeding with the default postgreSQL version based on Linux version ----"
     sudo apt-get install -y postgresql postgresql-server-dev-all 1>/dev/null
 fi
 echo -e "${GREEN}OK.${NC} PostgreSQL Server installed successfully."
 POSTGRES_VERSION=$(psql --version | awk '{print $3}')
 echo -e "${YELLOW}PostgreSQL version:${NC} $POSTGRES_VERSION"
 
-echo -e "\n---- Creating OdooO PostgreSQL User  ----"
+echo -e "\n---- Creating Odoo PostgreSQL User  ----"
 sudo su - postgres -c "createuser -s $OE_USER" 2> /dev/null || true
 echo -e "${GREEN}OK.${NC} Odoo postgresql user created."
 echo -e "${YELLOW}PostgreSQL user:${NC} $OE_USER"
@@ -148,9 +155,6 @@ sudo dpkg-reconfigure --frontend noninteractive tzdata
 echo -e "${GREEN}OK.${NC} Timezone data updated."
 
 #--------------------------------------------------
-# Ubuntu 22.04 with venv requires home directory ownership
-sudo mkdir -p $OE_HOME
-#--------------------------------------------------
 # Create user and directories
 #--------------------------------------------------
 
@@ -158,15 +162,18 @@ echo -e "\n---- Create Odoo system user ----"
 sudo adduser --system --quiet --shell=/bin/bash --home=$OE_HOME --gecos 'ODOO' --group $OE_USER
 #The user should also be added to the sudo'ers group.
 sudo adduser $OE_USER sudo
-echo -e "${GREEN}OK.${NC} Odoo system user ${BLUE}$OE_USER ${NC} created."
+# Just in case: fix home directory ownership 
+sudo chown -R $OE_USER:$OE_USER $OE_HOME
+
+echo -e "${GREEN}OK.${NC} Created system user ${BLUE}$OE_USER${NC} with home directory ${BLUE}/odoo${NC}."
 
 echo -e "\n---- Create Log directory ----"
 sudo mkdir /var/log/$OE_USER
 sudo chown $OE_USER:$OE_USER /var/log/$OE_USER
-sudo chown -R odoo:odoo /$OE_HOME
+
 echo -e "${GREEN}OK.${NC} Log directory created at ${BLUE}/var/log/$OE_USER${NC}."
 
-echo -e "\n--- Installing Python with correct version --"
+echo -e "\n--- Installing Python --"
 
 # Verify and install Python versions
 install_python() {
@@ -201,7 +208,7 @@ done
 echo -e "${GREEN}OK.${NC} Python ${BLUE}$PYTHON_VER${NC} installed successfully."
 
 if [ "$USE_PYTHON_VENV" = "True" ]; then
-  echo -e "\n---- Creating Python virtual environment at ${BLUE}$OE_VENV${NC} ----"
+  echo -e "\n---- Creating Python virtual environment at ${BLUE}$OE_HOME/$OE_VENV${NC} ----"
   python${PYTHON_VER} -m venv $OE_VENV
   echo -e "${GREEN}OK.${NC} Python virtual environment created."
 
@@ -261,7 +268,8 @@ if [ $INSTALL_WKHTMLTOPDF = "True" ]; then
     # Ubuntu 22.04 LTS requires libjpeg62-turbo for wkhtmltopdf, but that is not available in the default repositories.
     # Resolution: libjpeg-turbo8 is a drop-in replacement for libjpeg62-turbo.
     sudo apt install -y libjpeg-turbo8 1>/dev/null
-    sudo gdebi -n wkhtmltox_0.12.6-1.stretch_amd64.deb 1>/dev/null
+    sudo dpkg -i --ignore-depends=libjpeg62-turbo wkhtmltox_0.12.6-1.stretch_amd64.deb
+    sudo apt-get install -f -y 1>/dev/null
   else
       # For older versions of Ubuntu
     _deb_file=$(basename $_url)
@@ -287,7 +295,7 @@ fi
 #--------------------------------------------------
 echo -e "\n==== Installing ODOO Server ===="
 sudo git clone --quiet --depth 1 --branch $OE_VERSION https://www.github.com/odoo/odoo $OE_HOME_EXT/
-echo -e "${NC}Odoo ${BLUE}$OE_VERSION source cloned from GitHub to ${OE_HOME_EXT}${NC}."
+echo -e "${NC}Odoo ${BLUE}$OE_VERSION${NC} source cloned from GitHub to ${OE_HOME_EXT}${NC}."
 
 if [ $IS_ENTERPRISE = "True" ]; then
     # Odoo Enterprise install!
@@ -343,7 +351,18 @@ else
   sudo su root -c "printf 'xmlrpc_port = ${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
 fi
 sudo su root -c "printf 'logfile = /var/log/${OE_USER}/${OE_CONFIG}.log\n' >> /etc/${OE_CONFIG}.conf"
-sudo su root -c "printf 'longpolling_port = $LONGPOLLING_PORT\n' >> /etc/${OE_CONFIG}.conf"
+
+# Add longpolling or gevent port depending on Odoo version
+ODOO_MAJOR_VERSION=$(echo "$OE_VERSION" | cut -d '.' -f1)
+
+if [ "$ODOO_MAJOR_VERSION" -ge 16 ]; then
+  echo -e "\nAdding gevent_port = $LONGPOLLING_PORT to config (Odoo $OE_VERSION)"
+  sudo su root -c "printf 'gevent_port = $LONGPOLLING_PORT\n' >> /etc/${OE_CONFIG}.conf"
+else
+  echo -e "\nAdding longpolling_port = $LONGPOLLING_PORT to config (Odoo $OE_VERSION)"
+  sudo su root -c "printf 'longpolling_port = $LONGPOLLING_PORT\n' >> /etc/${OE_CONFIG}.conf"
+fi
+
 
 if [ $IS_ENTERPRISE = "True" ]; then
     sudo su root -c "printf 'addons_path=${OE_HOME}/enterprise/addons,${OE_HOME_EXT}/addons\n' >> /etc/${OE_CONFIG}.conf"
@@ -356,9 +375,9 @@ sudo chmod 640 /etc/${OE_CONFIG}.conf
 #Verifying longpolling port
 
 if [ "$USE_PYTHON_VENV" = "True" ]; then
-  sudo su root -c "echo 'sudo -u $OE_USER $OE_VENV/bin/python3 $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf --longpolling-port=$LONGPOLLING_PORT' >> $OE_HOME_EXT/start.sh"
+  sudo su root -c "echo 'sudo -u $OE_USER $OE_VENV/bin/python3 $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf' >> $OE_HOME_EXT/start.sh"
 else
-  sudo su root -c "echo 'sudo -u $OE_USER $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf --longpolling-port=$LONGPOLLING_PORT' >> $OE_HOME_EXT/start.sh"
+  sudo su root -c "echo 'sudo -u $OE_USER $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf' >> $OE_HOME_EXT/start.sh"
 fi
 
 sudo chmod 755 $OE_HOME_EXT/start.sh
@@ -554,7 +573,14 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
   sudo snap refresh core 1>/dev/null
   sudo snap install --classic certbot 1>/dev/null
   sudo apt-get install -y python3-certbot-nginx 1>/dev/null
-  sudo certbot --nginx -d $WEBSITE_NAME --noninteractive --agree-tos --email $ADMIN_EMAIL --redirect
+  if [ "$USE_LETSENCRYPT_STAGING" = "True" ]; then
+    CERTBOT_STAGE_ARG="--staging"
+    echo -e "${YELLOW}Warning:${NC} Using Let's Encrypt staging environment to avoid rate limits."
+  else
+    CERTBOT_STAGE_ARG=""
+  fi
+  sudo certbot --nginx $CERTBOT_STAGE_ARG -d "$WEBSITE_NAME" --non-interactive --agree-tos -m "$EMAIL" --redirect --keep-until-expiring
+
   sudo service nginx reload
   echo -e "${GREEN}OK.${NC} Certbot installed and SSL/HTTPS enabled for ${BLUE}$WEBSITE_NAME${NC}."  
 else
@@ -579,7 +605,7 @@ After=network.target postgresql.service
 Type=simple
 User=$OE_USER
 Group=$OE_USER
-ExecStart=$OE_VENV/bin/python3 $OE_HOME_EXT/odoo-bin --config=/etc/$OE_CONFIG.conf --longpolling-port=$LONGPOLLING_PORT
+ExecStart=$OE_VENV/bin/python3 $OE_HOME_EXT/odoo-bin --config=/etc/$OE_CONFIG.conf
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure
