@@ -21,12 +21,13 @@
 # Set the odoo server website name
 WEBSITE_NAME="_"
 # Set to true to install and configure nginx, "False" to skip nginx installation
-INSTALL_NGINX="False"
+INSTALL_NGINX="True"
 # Set to "True" to install certbot and have ssl enabled, "False" to use http
 ENABLE_SSL="True"
 # Provide Email to register ssl certificate from certbot
 ADMIN_EMAIL="odoo@example.com"
-# Change to "False" when deploying live. Keep it "True" for testing purposes.
+# Change to "False" when deploying to a live sever. Keep it "True" for testing purposes.
+# This will use the Let's Encrypt staging server to avoid hitting rate limits.
 USE_LETSENCRYPT_STAGING="True"  
 
 # Choose the Odoo version which you want to install. For example: 16.0, 15.0, 14.0 or saas-22. 
@@ -58,6 +59,9 @@ OE_CONFIG="${OE_USER}-server"
 OE_HOME="/$OE_USER"
 OE_HOME_EXT="/$OE_USER/${OE_USER}-server"
 OE_VENV="$OE_HOME/venv"
+OE_WORKERS="2"
+OE_MAX_CRON_THREADS="1"
+#---------------------------------------------------
 
 # ---------------------------------------------------
 # END CONFIGURATION VARIABLES
@@ -226,6 +230,11 @@ else
   sudo -H pip3 install --quiet --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
   echo -e "${GREEN}OK.${NC} pip requirements installed globally."
 fi
+if $OE_VENV/bin/python3 -m pip show gevent >/dev/null 2>&1; then
+  echo -e "${GREEN}OK.${NC} gevent is installed and ready for workers mode."
+else
+  echo -e "${YELLOW}WARNING:${NC} gevent not found. Odoo uses werkzeug and does not support workers or longpolling."
+fi
 
 echo -e "\n---- Installing core system packages ----"
 sudo apt-get install -y git python3-cffi build-essential wget python3-dev python3-venv python3-wheel plocate 1>/dev/null
@@ -243,39 +252,28 @@ echo -e "  ${BLUE}NPM${NC}      version: ${YELLOW}$(npm -v)${NC}"
 echo -e "  ${BLUE}rtlcss${NC}   version: ${YELLOW}$(rtlcss -v)${NC}"
 
 #--------------------------------------------------
-# Install Wkhtmltopdf if user has selected it
+# Install Wkhtmltopdf (AppImage version)
 #--------------------------------------------------
-if [ $INSTALL_WKHTMLTOPDF = "True" ]; then
-  echo -e "\n---- Installing ${BLUE}wkhtmltopdf${NC} ----"
+if [ "$INSTALL_WKHTMLTOPDF" = "True" ]; then
+  echo -e "\n---- Installing ${BLUE}wkhtmltopdf${NC} via AppImage ----"
 
-  #Pick up correct one from x64 & x32 versions:
-  if [ "`getconf LONG_BIT`" == "64" ];then
-      _url=$WKHTMLTOX_X64
-  else
-      _url=$WKHTMLTOX_X32
-  fi
-  if ! sudo wget -q $_url; then
-    echo "Error: Failed to download wkhtmltopdf from $_url"
-    exit 1
-  fi
+  WKHTML_APPIMAGE_URL="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox-0.12.6-1.appimage"
 
-  if [[ $(lsb_release -r -s) == "22.04" ]]; then
-    # Ubuntu 22.04 LTS needs a specific Stretch package of wkhtmltopdf
-    if ! sudo wget -q https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.stretch_amd64.deb; then
-      echo "Error: Failed to download $_url"
-      exit 1
-    fi
-    # Ubuntu 22.04 LTS requires libjpeg62-turbo for wkhtmltopdf, but that is not available in the default repositories.
-    # Resolution: libjpeg-turbo8 is a drop-in replacement for libjpeg62-turbo.
-    sudo apt install -y libjpeg-turbo8 1>/dev/null
-    sudo dpkg -i --ignore-depends=libjpeg62-turbo wkhtmltox_0.12.6-1.stretch_amd64.deb
-    sudo apt-get install -f -y 1>/dev/null
+  sudo wget -q "$WKHTML_APPIMAGE_URL" -O /usr/local/bin/wkhtmltopdf
+  sudo chmod +x /usr/local/bin/wkhtmltopdf
+
+  # Create symlink for wkhtmltoimage
+  sudo ln -sf /usr/local/bin/wkhtmltopdf /usr/local/bin/wkhtmltoimage
+
+  if command -v wkhtmltopdf &> /dev/null; then
+    echo -e "${GREEN}OK.${NC} wkhtmltopdf installed to ${BLUE}/usr/local/bin/wkhtmltopdf${NC}"
+    echo -e "  wkhtmltopdf version: ${YELLOW}$(wkhtmltopdf -V | awk '{print $2}')${NC}"
   else
-      # For older versions of Ubuntu
-    _deb_file=$(basename $_url)
-    sudo apt install -y ./"$_deb_file" 1>/dev/null
-    rm -f "$_deb_file"
+    echo -e "${YELLOW}WARNING.${NC} wkhtmltopdf installation may have failed. Binary not found."
   fi
+else
+  echo -e "${YELLOW}Skipped.${NC} wkhtmltopdf was not selected for installation."
+fi
   
   sudo ln -s /usr/local/bin/wkhtmltopdf /usr/bin
   sudo ln -s /usr/local/bin/wkhtmltoimage /usr/bin
@@ -288,8 +286,6 @@ else
   echo -e "${YELLOW}NOTE:${NC} wkhtmltopdf was not installed due to the user's choice."
 fi
 
-
-
 #--------------------------------------------------
 # Install ODOO
 #--------------------------------------------------
@@ -300,7 +296,7 @@ echo -e "${NC}Odoo ${BLUE}$OE_VERSION${NC} source cloned from GitHub to ${OE_HOM
 if [ $IS_ENTERPRISE = "True" ]; then
     # Odoo Enterprise install!
     sudo pip3 install psycopg2-binary pdfminer.six 1>/dev/null
-    echo -e "\n--- Creating symlink for node"
+    echo -e "\n Creating symlink for node"
     sudo ln -s /usr/bin/nodejs /usr/bin/node
     sudo su $OE_USER -c "mkdir $OE_HOME/enterprise"
     sudo su $OE_USER -c "mkdir $OE_HOME/enterprise/addons"
@@ -334,7 +330,7 @@ echo -e "\n---- Setting permissions on home folder ----"
 sudo chown -R $OE_USER:$OE_USER $OE_HOME/*
 echo -e "${GREEN}OK.${NC} Home folder permissions set."
 
-echo -e "* Init server config file"
+echo -e "* Init server configuration file"
 
 sudo touch /etc/${OE_CONFIG}.conf
 echo -e "* Populating server config file"
@@ -353,6 +349,7 @@ fi
 sudo su root -c "printf 'logfile = /var/log/${OE_USER}/${OE_CONFIG}.log\n' >> /etc/${OE_CONFIG}.conf"
 
 # Add longpolling or gevent port depending on Odoo version
+# Odoo changed the longpolling_port to gevent_port in version 16.0
 ODOO_MAJOR_VERSION=$(echo "$OE_VERSION" | cut -d '.' -f1)
 
 if [ "$ODOO_MAJOR_VERSION" -ge 16 ]; then
@@ -372,99 +369,7 @@ fi
 sudo chown $OE_USER:$OE_USER /etc/${OE_CONFIG}.conf
 sudo chmod 640 /etc/${OE_CONFIG}.conf
 
-#Verifying longpolling port
-
-if [ "$USE_PYTHON_VENV" = "True" ]; then
-  sudo su root -c "echo 'sudo -u $OE_USER $OE_VENV/bin/python3 $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf' >> $OE_HOME_EXT/start.sh"
-else
-  sudo su root -c "echo 'sudo -u $OE_USER $OE_HOME_EXT/odoo-bin --config=/etc/${OE_CONFIG}.conf' >> $OE_HOME_EXT/start.sh"
-fi
-
-sudo chmod 755 $OE_HOME_EXT/start.sh
-
-#--------------------------------------------------
-# Adding ODOO as a deamon (initscript)
-#--------------------------------------------------
-
-echo -e "* Create init file"
-cat <<EOF > ~/$OE_CONFIG
-#!/bin/sh
-### BEGIN INIT INFO
-# Provides: $OE_CONFIG
-# Required-Start: \$remote_fs \$syslog
-# Required-Stop: \$remote_fs \$syslog
-# Should-Start: \$network
-# Should-Stop: \$network
-# Default-Start: 2 3 4 5
-# Default-Stop: 0 1 6
-# Short-Description: Enterprise Business Applications
-# Description: ODOO Business Applications
-### END INIT INFO
-PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin
-
-# Setting up Python virtual environment if USE_PYTHON_VENV is True
-# Additional options that are passed to the Daemon.
-
-if [ "$USE_PYTHON_VENV" = "True" ]; then
-  DAEMON=$OE_VENV/bin/python3
-  DAEMON_OPTS="$OE_HOME_EXT/odoo-bin -c \$CONFIGFILE"
-else
-  DAEMON=$OE_HOME_EXT/odoo-bin
-  DAEMON_OPTS="-c \$CONFIGFILE"
-fi
-
-NAME=$OE_CONFIG
-DESC=$OE_CONFIG
-# Specify the user name (Default: odoo).
-USER=$OE_USER
-# Specify an alternate config file (Default: /etc/openerp-server.conf).
-CONFIGFILE="/etc/${OE_CONFIG}.conf"
-# pidfile
-PIDFILE=/var/run/\${NAME}.pid
-# Additional options that are passed to the Daemon.
-[ -x \$DAEMON ] || exit 0
-[ -f \$CONFIGFILE ] || exit 0
-checkpid() {
-[ -f \$PIDFILE ] || return 1
-pid=\`cat \$PIDFILE\`
-[ -d /proc/\$pid ] && return 0
-return 1
-}
-case "\${1}" in
-start)
-echo -n "Starting \${DESC}: "
-start-stop-daemon --start --quiet --pidfile \$PIDFILE \
---chuid \$USER --background --make-pidfile \
---exec \$DAEMON -- \$DAEMON_OPTS
-echo "\${NAME}."
-;;
-stop)
-echo -n "Stopping \${DESC}: "
-start-stop-daemon --stop --quiet --pidfile \$PIDFILE \
---oknodo
-echo "\${NAME}."
-;;
-restart|force-reload)
-echo -n "Restarting \${DESC}: "
-start-stop-daemon --stop --quiet --pidfile \$PIDFILE \
---oknodo
-sleep 1
-start-stop-daemon --start --quiet --pidfile \$PIDFILE \
---chuid \$USER --background --make-pidfile \
---exec \$DAEMON -- \$DAEMON_OPTS
-echo "\${NAME}."
-;;
-*)
-#N=/etc/init.d/\$NAME
-echo "Usage: \$NAME {start|stop|restart|force-reload}" >&2
-exit 1
-;;
-esac
-exit 0
-EOF
-
-echo -e "${GREEN}OK.${NC} Startup script created."
-
+echo -e "${GREEN}OK.${NC} Configuration file created at ${BLUE}/etc/${OE_CONFIG}.conf${NC}."
 #--------------------------------------------------
 # Install Nginx if needed
 #--------------------------------------------------
@@ -575,16 +480,20 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
   sudo apt-get install -y python3-certbot-nginx 1>/dev/null
   if [ "$USE_LETSENCRYPT_STAGING" = "True" ]; then
     CERTBOT_STAGE_ARG="--staging"
-    echo -e "${YELLOW}Warning:${NC} Using Let's Encrypt staging environment to avoid rate limits."
+    echo -e "${YELLOW}NOTE:${NC} Using Let's Encrypt staging environment to avoid rate limits."
+    echo -e "This is for testing and development servers only. Use ${BLUE}USE_LETSENCRYPT_STAGING=False${NC} for production environment."
   else
     CERTBOT_STAGE_ARG=""
   fi
-  sudo certbot --nginx $CERTBOT_STAGE_ARG -d "$WEBSITE_NAME" --non-interactive --agree-tos -m "$EMAIL" --redirect --keep-until-expiring
+  sudo certbot --nginx $CERTBOT_STAGE_ARG -d "$WEBSITE_NAME" --non-interactive --agree-tos -m "$ADMIN_EMAIL" --redirect --keep-until-expiring
 
   sudo service nginx reload
-  echo -e "${GREEN}OK.${NC} Certbot installed and SSL/HTTPS enabled for ${BLUE}$WEBSITE_NAME${NC}."  
+  echo -e "${GREEN}OK.${NC} Certbot is installed and SSL/HTTPS enabled for ${BLUE}$WEBSITE_NAME${NC}."
+  if [ "$USE_LETSENCRYPT_STAGING" = "True" ]; then
+    echo -e "${YELLOW}NOTE:${NC} Certbot is using the Let's Encrypt staging and thus web browser can show a certificate warning."
+  fi
 else
-  echo "SSL/HTTPS is not enabled due to choice of the user or because of a misconfiguration!"
+  echo "SSL/HTTPS is not enabled due to user's choise or because of a misconfiguration!"
   if [ $ADMIN_EMAIL = "odoo@example.com" ]; then 
     echo -e "${RED}ERROR${NC} Certbot does not support registering with ${YELLOW}odoo@example.com${NC}. Please use a real e-mail address."
   fi
@@ -605,7 +514,7 @@ After=network.target postgresql.service
 Type=simple
 User=$OE_USER
 Group=$OE_USER
-ExecStart=$OE_VENV/bin/python3 $OE_HOME_EXT/odoo-bin --config=/etc/$OE_CONFIG.conf
+ExecStart=$OE_VENV/bin/python3 $OE_HOME_EXT/odoo-bin --config=/etc/$OE_CONFIG.conf --workers=$OE_WORKERS --max-cron-threads=$OE_MAX_CRON_THREADS
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure
