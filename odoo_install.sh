@@ -23,6 +23,9 @@ OE_HOME_EXT="/$OE_USER/${OE_USER}-server"
 # Ubuntu environments have made system installed python3 packages very difficutl to manage. Henceforth, we will use a virtual environment for Odoo.
 # This will ensure that Odoo has its own Python environment and does not conflict with system packages
 # This is the default location where the Odoo virtual environment will be created.
+#
+# Note: for Python Pip installations the script is calling pip as pip3. 
+# For Virtual Environment installations, it will use the pip from the virtual environment. $OE_VENV/bin/pip
 USE_PYTHON_VENV="True"
 # If USE_PYTHON_VENV is True, this is the location of the virtual environment.
 OE_VENV="$OE_HOME/venv"
@@ -86,8 +89,8 @@ if (( $(echo "$OE_VERSION < 13.0" | bc -l) )); then
   sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 40976EAF437D05B5
   sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32
 fi
-sudo apt-get update && sudo apt-get upgrade -y
-sudo apt-get install -y libpq-dev bc
+sudo apt-get update && sudo apt-get upgrade -y 1>/dev/null
+sudo apt-get install -y libpq-dev bc 1>/dev/null
 
 #--------------------------------------------------
 # Install PostgreSQL Server
@@ -97,11 +100,11 @@ if [ $INSTALL_POSTGRESQL_FOURTEEN = "True" ]; then
     echo -e "\n---- Installing postgreSQL V14 due to the user it's choise ----"
     sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc|sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
     sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-    sudo apt-get update
-    sudo apt-get install -y postgresql-14
+    sudo apt-get update 1>/dev/null
+    sudo apt-get install -y postgresql-14 1>/dev/null
 else
     echo -e "\n---- Installing the default postgreSQL version based on Linux version ----"
-    sudo apt-get install -y postgresql postgresql-server-dev-all
+    sudo apt-get install -y postgresql postgresql-server-dev-all 1>/dev/null
 fi
 
 echo -e "\n---- Creating the ODOO PostgreSQL User  ----"
@@ -111,7 +114,7 @@ sudo su - postgres -c "createuser -s $OE_USER" 2> /dev/null || true
 # Install Dependencies
 #--------------------------------------------------
 echo "---- Ensuring server timezone data is up-to-date ----"
-sudo apt-get install -y locales libc6 tzdata util-linux
+sudo apt-get install -y locales libc6 tzdata util-linux 1>/dev/null
 sudo dpkg-reconfigure --frontend noninteractive tzdata
 
 #--------------------------------------------------
@@ -126,8 +129,8 @@ install_python() {
   local v=$1
   if ! command -v python${v} &>/dev/null; then
     sudo add-apt-repository -y ppa:deadsnakes/ppa
-    sudo apt update
-    sudo apt install -y python${v} python${v}-venv python${v}-dev
+    sudo apt update 1>/dev/null
+    sudo apt install -y python${v} python${v}-venv python${v}-dev 1>/dev/null
   fi
 }
 
@@ -150,21 +153,21 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   $OE_VENV/bin/python3 --version
 
   echo -e "\n---- Installing pip requirements in virtual environment ----"
-  $OE_VENV/bin/pip install --upgrade pip
-  $OE_VENV/bin/pip install wheel
-  $OE_VENV/bin/pip install -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+  $OE_VENV/bin/pip install --quiet --upgrade pip
+  $OE_VENV/bin/pip install --quiet wheel
+  $OE_VENV/bin/pip install -r --quiet https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
 else
   echo -e "\n---- Installing pip requirements globally ----"
-  sudo -H pip3 install --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+  sudo -H pip3 install --quiet --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
 fi
 
-sudo apt-get install -y git python3-cffi build-essential wget python3-dev python3-venv python3-wheel plocate
-sudo apt-get install -y libxslt-dev libzip-dev libldap2-dev libsasl2-dev python3-setuptools node-less              
-sudo apt-get install -y libpng-dev libjpeg-dev gdebi
+sudo apt-get install -y git python3-cffi build-essential wget python3-dev python3-venv python3-wheel plocate 1>/dev/null
+sudo apt-get install -y libxslt-dev libzip-dev libldap2-dev libsasl2-dev python3-setuptools node-less 1>/dev/null            
+sudo apt-get install -y libpng-dev libjpeg-dev gdebi 1>/dev/null
 
 echo -e "\n---- Installing nodeJS NPM and rtlcss for LTR support ----"
-sudo apt-get install nodejs npm -y
-sudo npm install -g rtlcss
+sudo apt-get install -y nodejs npm 1>/dev/null
+sudo npm install -g rtlcss 1>/dev/null
 
 #--------------------------------------------------
 # Install Wkhtmltopdf if user has selected it
@@ -177,14 +180,14 @@ if [ $INSTALL_WKHTMLTOPDF = "True" ]; then
   else
       _url=$WKHTMLTOX_X32
   fi
-  sudo wget $_url
+  sudo wget -q $_url
   
 
   if [[ $(lsb_release -r -s) == "22.04" ]]; then
     # Ubuntu 22.04 LTS needs a specific Stretch package of wkhtmltopdf
     wget https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.stretch_amd64.deb
-    sudo apt install -y libjpeg62-turbo
-    sudo gdebi -n wkhtmltox_0.12.6-1.stretch_amd64.deb
+    sudo apt install -y libjpeg62-turbo 1>/dev/null
+    sudo gdebi -n wkhtmltox_0.12.6-1.stretch_amd64.deb 1>/dev/null
 
   else
       # For older versions of Ubuntu
@@ -214,7 +217,7 @@ sudo git clone --depth 1 --branch $OE_VERSION https://www.github.com/odoo/odoo $
 
 if [ $IS_ENTERPRISE = "True" ]; then
     # Odoo Enterprise install!
-    sudo pip3 install psycopg2-binary pdfminer.six
+    sudo pip3 install psycopg2-binary pdfminer.six 1>/dev/null
     echo -e "\n--- Create symlink for node"
     sudo ln -s /usr/bin/nodejs /usr/bin/node
     sudo su $OE_USER -c "mkdir $OE_HOME/enterprise"
@@ -234,8 +237,8 @@ if [ $IS_ENTERPRISE = "True" ]; then
     echo -e "\n---- Added Enterprise code under $OE_HOME/enterprise/addons ----"
     echo -e "\n---- Installing Enterprise specific libraries ----"
     sudo -H pip3 install num2words ofxparse dbfread ebaysdk firebase_admin pyOpenSSL
-    sudo npm install -g less
-    sudo npm install -g less-plugin-clean-css
+    sudo npm install -g less 1>/dev/null
+    sudo npm install -g less-plugin-clean-css 1>/dev/null
 fi
 
 echo -e "\n---- Create custom module directory ----"
@@ -377,7 +380,7 @@ sudo update-rc.d $OE_CONFIG defaults
 #--------------------------------------------------
 if [ $INSTALL_NGINX = "True" ]; then
   echo -e "\n---- Installing and setting up Nginx ----"
-  sudo apt install nginx -y
+  sudo apt install -y nginx 1>/dev/null
   cat <<EOF > ~/odoo
 server {
   listen 80;
@@ -473,11 +476,12 @@ fi
 #--------------------------------------------------
 
 if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != "odoo@example.com" ]  && [ $WEBSITE_NAME != "_" ];then
-  sudo apt-get update -y
-  sudo apt install -y snapd
-  sudo snap install core; snap refresh core
-  sudo snap install --classic certbot
-  sudo apt-get install -y python3-certbot-nginx
+  sudo apt-get update -y 1>/dev/null
+  sudo apt install -y snapd 1>/dev/null
+  sudo snap install core 1>/dev/null
+  sudo snap refresh core 1>/dev/null
+  sudo snap install --classic certbot 1>/dev/null
+  sudo apt-get install -y python3-certbot-nginx 1>/dev/null
   sudo certbot --nginx -d $WEBSITE_NAME --noninteractive --agree-tos --email $ADMIN_EMAIL --redirect
   sudo service nginx reload
   echo "SSL/HTTPS is enabled!"
@@ -517,7 +521,8 @@ else
 fi
 
 if [ -f /var/log/${OE_USER}/${OE_CONFIG}.log ]; then
-  echo -e "\n Latest Odoo log output:"
+  echo -e "\n Latest Odoo log output tail:"
+  echo "/var/log/${OE_USER}/${OE_CONFIG}.log"
   sudo tail -n 20 /var/log/${OE_USER}/${OE_CONFIG}.log
 else
   echo "ERROR: No log file found at /var/log/${OE_USER}/${OE_CONFIG}.log"
