@@ -69,13 +69,14 @@ OE_MAX_CRON_THREADS="2"
 # ---------------------------------------------------
 # END CONFIGURATION VARIABLES
 # ---------------------------------------------------
-
 # Set ANSI colors
 YELLOW='\033[1;33m'
 GREEN='\033[1;32m'
 RED='\033[1;31m'
 BLUE='\033[1;34m'
 NC='\033[0m' # No Color
+cd /tmp || { echo -e "${RED}FATAL ERROR${NC}. Failed to change directory to /tmp"; exit 1; }
+
 # Enable logging
 LOGFILE="odoo-install.log"
 exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' | tee -a "$LOGFILE") 2>&1
@@ -151,41 +152,6 @@ sudo apt-get install -y node-less 1>/dev/null
 echo -e "     ${GREEN}OK.${NC} Frontend dependencies installed."
 echo -e "     ${GREEN}OK.${NC} All operating system updates installed."
 
-
-#--------------------------------------------------
-# Install PostgreSQL Server
-#--------------------------------------------------
-echo -e "\n---- Installing PostgreSQL Server"
-if [ $INSTALL_POSTGRESQL_FOURTEEN = "True" ]; then
-    echo -e "     ${YELLOW}NOTE${NC} Proceeding with postgreSQL V14 due to the user's choise"
-    sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc|sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
-    sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-    sudo apt-get update 1>/dev/null
-    sudo apt-get install -y postgresql-14 1>/dev/null
-else
-    echo -e "     ${YELLOW}NOTE${NC} Proceeding with the default postgreSQL version based on Linux version"
-    sudo apt-get install -y postgresql postgresql-server-dev-all 1>/dev/null
-fi
-echo -e "     ${GREEN}OK.${NC} PostgreSQL server installed successfully."
-POSTGRES_VERSION=$(psql --version | awk '{print $3}')
-echo -e "     ${YELLOW}NOTE${NC} PostgreSQL version:${BLUE} $POSTGRES_VERSION${NC}"
-
-echo -e "\n---- Creating Odoo PostgreSQL User "
-sudo su - postgres -c "createuser -s $OE_USER" 2> /dev/null || true
-sudo -u postgres psql -c "DO \$\$ BEGIN
-                            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${OE_USER}') THEN
-                                CREATE ROLE ${OE_USER} WITH LOGIN CREATEDB;
-                            END IF;
-                          END \$\$;"
-                          
-sudo -u postgres psql -c "SELECT 'CREATE DATABASE odoo OWNER ${OE_USER}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'odoo')\gexec"
-
-
-echo -e "     ${GREEN}OK.${NC} Odoo postgresql user created."
-echo -e "     ${YELLOW}NOTE${NC} PostgreSQL user:${BLUE} $OE_USER${NC}"
-sudo -u ${OE_USER} -H psql -d odoo -c '\q' || echo -e "     ${RED}WARNING${NC} Odoo user cannot access the database."
-
-
 #--------------------------------------------------
 # Install Dependencies
 #--------------------------------------------------
@@ -212,6 +178,45 @@ sudo mkdir /var/log/$OE_USER
 sudo chown $OE_USER:$OE_USER /var/log/$OE_USER
 
 echo -e "     ${GREEN}OK.${NC} Log directory created at ${BLUE}/var/log/$OE_USER${NC}."
+
+#--------------------------------------------------
+# Install PostgreSQL Server
+#--------------------------------------------------
+
+echo -e "\n---- Installing PostgreSQL Server"
+if [ $INSTALL_POSTGRESQL_FOURTEEN = "True" ]; then
+    echo -e "     ${YELLOW}NOTE${NC} Proceeding with postgreSQL V14 due to the user's choise"
+    sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc|sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+    sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+    sudo apt-get update 1>/dev/null
+    sudo apt-get install -y postgresql-14 1>/dev/null
+else
+    echo -e "     ${YELLOW}NOTE${NC} Proceeding with the default postgreSQL version based on Linux version"
+    sudo apt-get install -y postgresql postgresql-server-dev-all 1>/dev/null
+fi
+echo -e "     ${GREEN}OK.${NC} PostgreSQL server installed successfully."
+POSTGRES_VERSION=$(psql --version | awk '{print $3}')
+echo -e "     ${YELLOW}NOTE${NC} PostgreSQL version:${BLUE} $POSTGRES_VERSION${NC}"
+
+echo -e "\n---- Creating Odoo PostgreSQL User "
+sudo su - postgres -c "cd /tmp && createuser -s $OE_USER" 2> /dev/null || true
+sudo -u postgres psql -c "DO \$\$ BEGIN
+                            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${OE_USER}') THEN
+                                CREATE ROLE ${OE_USER} WITH LOGIN CREATEDB;
+                            END IF;
+                          END \$\$;"
+                          
+sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'odoo'" | grep -q 1 || \
+sudo -u postgres createdb -O ${OE_USER} odoo
+
+
+echo -e "     ${GREEN}OK.${NC} Odoo postgresql user created."
+echo -e "     ${YELLOW}NOTE${NC} PostgreSQL user:${BLUE} $OE_USER${NC}"
+sudo -u ${OE_USER} -H psql -d odoo -c '\q' || echo -e "     ${RED}WARNING${NC} Odoo user cannot access the database."
+
+#--------------------------------------------------
+# Install Python
+#--------------------------------------------------
 
 echo -e "\n--- Installing Python"
 
