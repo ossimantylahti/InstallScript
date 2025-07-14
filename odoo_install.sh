@@ -157,23 +157,34 @@ echo -e "     ${GREEN}OK.${NC} All operating system updates installed."
 #--------------------------------------------------
 echo -e "\n---- Installing PostgreSQL Server"
 if [ $INSTALL_POSTGRESQL_FOURTEEN = "True" ]; then
-    echo -e "     Proceeding with postgreSQL V14 due to the user's choise"
+    echo -e "     ${YELLOW}NOTE${NC} Proceeding with postgreSQL V14 due to the user's choise"
     sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc|sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
     sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
     sudo apt-get update 1>/dev/null
     sudo apt-get install -y postgresql-14 1>/dev/null
 else
-    echo -e " Proceeding with the default postgreSQL version based on Linux version"
+    echo -e "     ${YELLOW}NOTE${NC} Proceeding with the default postgreSQL version based on Linux version"
     sudo apt-get install -y postgresql postgresql-server-dev-all 1>/dev/null
 fi
-echo -e "     ${GREEN}OK.${NC} PostgreSQL Server installed successfully."
+echo -e "     ${GREEN}OK.${NC} PostgreSQL server installed successfully."
 POSTGRES_VERSION=$(psql --version | awk '{print $3}')
-echo -e "     ${YELLOW}PostgreSQL version:${NC} $POSTGRES_VERSION"
+echo -e "     ${YELLOW}NOTE${NC} PostgreSQL version:${BLUE} $POSTGRES_VERSION${NC}"
 
 echo -e "\n---- Creating Odoo PostgreSQL User "
 sudo su - postgres -c "createuser -s $OE_USER" 2> /dev/null || true
+sudo -u postgres psql -c "DO \$\$ BEGIN
+                            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${OE_USER}') THEN
+                                CREATE ROLE ${OE_USER} WITH LOGIN CREATEDB;
+                            END IF;
+                          END \$\$;"
+                          
+sudo -u postgres psql -c "SELECT 'CREATE DATABASE odoo OWNER ${OE_USER}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'odoo')\gexec"
+
+
 echo -e "     ${GREEN}OK.${NC} Odoo postgresql user created."
-echo -e "     ${YELLOW}PostgreSQL user:${NC} $OE_USER"
+echo -e "     ${YELLOW}NOTE${NC} PostgreSQL user:${BLUE} $OE_USER${NC}"
+sudo -u ${OE_USER} -H psql -d odoo -c '\q' || echo -e "     ${RED}WARNING${NC} Odoo user cannot access the database."
+
 
 #--------------------------------------------------
 # Install Dependencies
@@ -375,19 +386,20 @@ echo -e "     ${GREEN}OK.${NC} Home folder permissions set."
 
 sudo touch /etc/${OE_CONFIG}.conf
 echo -e "     ${GREEN}OK.${NC} Populating server configuration file"
+sudo su root -c "printf 'db_user=${OE_USER}\n' >> /etc/${OE_CONFIG}.conf"
 sudo su root -c "printf '[options] \n; This is the password that allows database operations:\n' >> /etc/${OE_CONFIG}.conf"
 if [ $GENERATE_RANDOM_PASSWORD = "True" ]; then
     OE_SUPERADMIN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)
     echo -e "     ${GREEN}OK.${NC}  Generated random admin password"
 fi
-sudo su root -c "printf 'admin_passwd = ${OE_SUPERADMIN}\n' >> /etc/${OE_CONFIG}.conf"
+sudo su root -c "printf 'admin_passwd=${OE_SUPERADMIN}\n' >> /etc/${OE_CONFIG}.conf"
 
 if [ "$(echo "$OE_VERSION > 11.0" | bc -l)" -eq 1 ]; then
-  sudo su root -c "printf '     http_port = ${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
+  sudo su root -c "printf 'http_port=${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
 else
-  sudo su root -c "printf '     xmlrpc_port = ${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
+  sudo su root -c "printf 'xmlrpc_port=${OE_PORT}\n' >> /etc/${OE_CONFIG}.conf"
 fi
-sudo su root -c "printf '     logfile = /var/log/${OE_USER}/${OE_CONFIG}.log\n' >> /etc/${OE_CONFIG}.conf"
+sudo su root -c "printf 'logfile=/var/log/${OE_USER}/${OE_CONFIG}.log\n' >> /etc/${OE_CONFIG}.conf"
 
 # Add longpolling or gevent port depending on Odoo version
 # Odoo changed the longpolling_port to gevent_port in version 16.0
@@ -395,12 +407,12 @@ ODOO_MAJOR_VERSION=$(echo "$OE_VERSION" | cut -d '.' -f1)
 
 if [ "$ODOO_MAJOR_VERSION" -ge 16 ]; then
   echo -e "\n     Adding gevent_port = $LONGPOLLING_PORT and workers to config (Odoo $OE_VERSION)"
-  sudo su root -c "printf 'gevent_port = $LONGPOLLING_PORT\n' >> /etc/${OE_CONFIG}.conf"
-  sudo su root -c "printf 'workers = $OE_WORKERS\n' >> /etc/${OE_CONFIG}.conf"
-  sudo su root -c "printf 'max_cron_threads = $OE_MAX_CRON_THREADS\n' >> /etc/${OE_CONFIG}.conf"
+  sudo su root -c "printf 'gevent_port=$LONGPOLLING_PORT\n' >> /etc/${OE_CONFIG}.conf"
+  sudo su root -c "printf 'workers=$OE_WORKERS\n' >> /etc/${OE_CONFIG}.conf"
+  sudo su root -c "printf 'max_cron_threads=$OE_MAX_CRON_THREADS\n' >> /etc/${OE_CONFIG}.conf"
 else
-  echo -e "\n     Adding longpolling_port = $LONGPOLLING_PORT to config (Odoo $OE_VERSION)"
-  sudo su root -c "printf 'longpolling_port = $LONGPOLLING_PORT\n' >> /etc/${OE_CONFIG}.conf"
+  echo -e "\n     Adding longpolling_port=$LONGPOLLING_PORT to config (Odoo $OE_VERSION)"
+  sudo su root -c "printf 'longpolling_port=$LONGPOLLING_PORT\n' >> /etc/${OE_CONFIG}.conf"
 fi
 
 
@@ -417,7 +429,7 @@ echo -e "     ${GREEN}OK.${NC} Configuration file created at ${BLUE}/etc/${OE_CO
 # Install Nginx if needed
 #--------------------------------------------------
 if [ $INSTALL_NGINX = "True" ]; then
-  echo -e "\n---- Installing and setting up Nginx"
+  echo -e "\n---- Installing and setting up nginx"
   sudo apt install -y nginx 1>/dev/null
   cat <<EOF > ~/odoo
 server {
@@ -503,7 +515,7 @@ EOF
   [ -e /etc/nginx/sites-enabled/default ] && sudo rm /etc/nginx/sites-enabled/default
 
   sudo service nginx reload
-  sudo su root -c "printf 'proxy_mode = True\n' >> /etc/${OE_CONFIG}.conf"
+  sudo su root -c "printf 'proxy_mode=True\n' >> /etc/${OE_CONFIG}.conf"
   echo -e "     ${GREEN}OK.${NC} The Nginx server is up and running. Configuration can be found at ${BLUE}/etc/nginx/sites-available/$WEBSITE_NAME${NC}."
 else
   echo "     ${YELLOW}INFO.${NC} Nginx is not installed due to user's choise."
