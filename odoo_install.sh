@@ -661,6 +661,84 @@ fi
 # Get server IP address (first non-loopback IPv4)
 SERVER_IP=$(hostname -I | awk '{print $1}')
 
+echo -e "${GREEN}Enabling Odoo to start on system boot...${NC}"
+
+sudo systemctl enable odoo-server > /dev/null 2>&1 && \
+echo -e "${GREEN}OK${NC}. Odoo service enabled successfully.${NC}" || \
+echo -e "${RED}ERROR${NC}. Failed to enable Odoo service. You can try manually: sudo systemctl enable odoo-server${NC}"
+
+#--------------------------------------------------
+# Final Odoo service validation with error flagging
+#--------------------------------------------------
+
+echo -e "\n${YELLOW}Validating Odoo service configuration and status...${NC}"
+
+validation_failed=false
+
+# 1. Check that the Odoo config file exists
+echo -e "${YELLOW}-- Reading Odoo configuration file: /etc/${OE_CONFIG}.conf${NC}"
+if sudo test -f /etc/${OE_CONFIG}.conf; then
+    sudo cat /etc/${OE_CONFIG}.conf
+else
+    echo -e "${RED}Missing configuration file: /etc/${OE_CONFIG}.conf${NC}"
+    validation_failed=true
+fi
+
+# 2. Check if Odoo service is running
+echo -e "\n${YELLOW}-- Checking systemd service status for odoo-server.${NC}"
+if sudo systemctl is-active --quiet odoo-server; then
+    echo -e "${GREEN}Odoo service is running.${NC}"
+else
+    echo -e "${RED}Odoo service is NOT running.${NC}"
+    validation_failed=true
+fi
+
+# 3. Show the latest Odoo logs
+echo -e "\n${YELLOW}-- Showing last 50 lines of Odoo log (/var/log/odoo/odoo-server.log)...${NC}"
+if sudo test -f /var/log/odoo/odoo-server.log; then
+    sudo tail -n 50 /var/log/odoo/odoo-server.log
+else
+    echo -e "${RED}Log file not found: /var/log/odoo/odoo-server.log${NC}"
+    validation_failed=true
+fi
+
+# 4. Show journal entries
+echo -e "\n${YELLOW}-- Fetching recent journal entries (last 50 lines)...${NC}"
+if sudo journalctl -u odoo-server -n 50 --no-pager >/dev/null 2>&1; then
+    sudo journalctl -u odoo-server -n 50 --no-pager
+else
+    echo -e "${RED}No journal entries found for odoo-server.${NC}"
+    validation_failed=true
+fi
+
+# 5. Check if Odoo is listening on HTTP port
+echo -e "\n${YELLOW}-- Verifying if Odoo is listening on port ${OE_PORT} (HTTP)...${NC}"
+if sudo lsof -i :${OE_PORT} | grep LISTEN >/dev/null; then
+    echo -e "${GREEN}Odoo is listening on port ${OE_PORT}.${NC}"
+else
+    echo -e "${RED}Nothing is listening on port ${OE_PORT}.${NC}"
+    validation_failed=true
+fi
+
+# 6. Check if Odoo is listening on longpolling port
+echo -e "\n${YELLOW}-- Verifying if Odoo is listening on port ${LONGPOLLING_PORT} (Longpolling)...${NC}"
+if sudo lsof -i :${LONGPOLLING_PORT} | grep LISTEN >/dev/null; then
+    echo -e "${GREEN}Odoo is listening on port ${LONGPOLLING_PORT}.${NC}"
+else
+    echo -e "${RED}Nothing is listening on port ${LONGPOLLING_PORT}.${NC}"
+    validation_failed=true
+fi
+
+# Summary
+if $validation_failed; then
+    echo -e "\n${RED}Validation failed.${NC} Please fix the above errors before proceeding.${NC}"
+    exit 1
+else
+    echo -e "\n${GREEN}Validation successfull.${NC} All checks passed.${NC}"
+fi
+
+
+
 echo -e "${GREEN}-----------------------------------------------------------"
 echo -e "Script done. Odoo is now installed and running. Configuration summary:"
 echo -e "-----------------------------------------------------------${NC}\n"
@@ -690,7 +768,7 @@ if [ "$INSTALL_NGINX" = "True" ]; then
   echo -e " Public URL:  http://$WEBSITE_NAME/"
 fi
 
-echo -e "\n${GREEN} Access Odoo in your browser:${NC}"
-echo -e " http://$SERVER_IP:$OE_PORT"
+echo -e "\n${GREEN} Access Odoo in your browser and create your database:${NC}"
+echo -e " http://$SERVER_IP:$OE_PORT/web/database/manager"
 
 echo -e "${GREEN}-----------------------------------------------------------${NC}\n"
