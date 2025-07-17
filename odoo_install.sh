@@ -558,16 +558,20 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
   echo -e "\n---- Installing ${BLUE}Certbot${NC} and enabling SSL/HTTPS"
   sudo apt-get update -y 1>/dev/null
   sudo apt install -y snapd 1>/dev/null
+  echo -e "     ${GREEN}OK.${NC} snapd installed.${NC}."
+  sudo snap version 1>/dev/null || { echo -e "     ${RED}ERROR${NC}: Snap is not installed or not working. Please install snapd and try again."; exit 1; }
   sudo snap install core 1>/dev/null
   sudo snap refresh core 1>/dev/null
+  echo -e "     ${GREEN}OK.${NC} snap core refreshed.${NC}."
   sudo snap install --classic certbot 1>/dev/null
   sudo apt-get install -y python3-certbot-nginx 1>/dev/null
   if [ "$USE_LETSENCRYPT_STAGING" = "True" ]; then
     CERTBOT_STAGE_ARG="--staging"
-    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt staging environment to avoid rate limits."
+    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt staging test environment to avoid rate limits."
     echo -e "     ${YELLOW}NOTE:${NC} This is for testing and development servers only." 
     echo -e "     ${YELLOW}NOTE:${NC} Use ${BLUE}USE_LETSENCRYPT_STAGING=False${NC} for production environment deployment."
   else
+    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt production environment."
     CERTBOT_STAGE_ARG=""
   fi
   sudo certbot --nginx $CERTBOT_STAGE_ARG -d "$WEBSITE_NAME" --non-interactive --agree-tos -m "$ADMIN_EMAIL" --redirect --keep-until-expiring
