@@ -557,14 +557,37 @@ fi
 if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != "odoo@example.com" ]  && [ $WEBSITE_NAME != "_" ];then
   echo -e "\n---- Installing ${BLUE}Certbot${NC} and enabling SSL/HTTPS"
   sudo apt-get update -y 1>/dev/null
+  sudo apt-get install -y python3-certbot-nginx 1>/dev/null
   sudo apt-get install -y snapd 1>/dev/null
   echo -e "     ${GREEN}OK.${NC} snapd installed.${NC}."
   sudo snap version 1>/dev/null || { echo -e "     ${RED}ERROR${NC}: Snap is not installed or not working. Please install snapd and try again."; exit 1; }
   sudo snap install core 1>/dev/null
   sudo snap refresh core 1>/dev/null
   echo -e "     ${GREEN}OK.${NC} snap core refreshed.${NC}."
-  sudo snap install --classic certbot 1>/dev/null
-  sudo apt-get install -y python3-certbot-nginx 1>/dev/null
+    #--------------------------------------------------
+    # Validate snapd.socket status before using Certbot
+    #--------------------------------------------------
+    echo -e "${YELLOW}-- Checking snapd.socket service status...${NC}"
+    SNAPD_STATUS=$(sudo systemctl is-active snapd.socket)
+
+    if [[ "$SNAPD_STATUS" == "active" ]]; then
+        echo -e "${GREEN}     OK${NC}. snapd.socket is active and listening.${NC}"
+    else
+        echo -e "${RED}     ERROR${NC}. snapd.socket is not active (status: $SNAPD_STATUS). Certbot installation may fail.${NC}"
+        echo -e "${RED}     You can try starting it manually: sudo systemctl start snapd.socket${NC}"
+    fi
+    #--------------------------------------------------
+    # Installing Certbot using snap and validating
+    #--------------------------------------------------
+    echo -e "${YELLOW}-- Installing Certbot via snap...${NC}"
+    if sudo snap install --classic certbot 1>/dev/null; then
+        echo -e "${GREEN}     OK${NC}. Certbot installed successfully via snap.${NC}"
+    else
+        echo -e "${RED}     ERROR${NC}. Failed to install Certbot via snap.${NC}"
+        echo -e "${NC}     Please verify snapd is functioning and try again manually:${NC}"
+        echo -e "${NC}     sudo snap install --classic certbot${NC}"
+    fi
+
   if [ "$USE_LETSENCRYPT_STAGING" = "True" ]; then
     CERTBOT_STAGE_ARG="--staging"
     echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt ${YELLOW}staging test${NC} environment to avoid rate limits."
