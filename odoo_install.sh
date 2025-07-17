@@ -194,6 +194,7 @@ fi
 # 5. Refresh core snap
 echo -e "\n---- Refreshing core snap"
 if sudo snap refresh core 1>/dev/null; then
+  echo -e ""
   echo -e "     ${GREEN}OK.${NC} core snap refreshed."
 else
   echo -e "     ${YELLOW}WARNING.${NC} core snap refresh failed or not needed."
@@ -272,7 +273,8 @@ echo -e "\n--- Installing Python"
 install_python() {
   local v=$1
   if ! command -v python${v} &>/dev/null; then
-    sudo add-apt-repository -y ppa:deadsnakes/ppa  1>/dev/null
+  #Deadsnakes repository is needed for older Python versions. And older Odoo requires those.
+    sudo add-apt-repository -y ppa:deadsnakes/ppa  1>/dev/null 
     sudo apt-get update 1>/dev/null
     sudo apt-get install -y python${v} python${v}-venv python${v}-dev 1>/dev/null
   fi
@@ -317,7 +319,8 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   echo -e "     ${GREEN}OK.${NC} pip requirements installed in virtual environment."
   ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
   echo -e "     ${GREEN}OK.${NC} pip gevent installed."
-  ${OE_VENV}/bin/python3 -c "import zope.event; print('     OK. zope.event confirmed')"
+  ${OE_VENV}/bin/python3 -c "import zope.event; print('     \033[0;32mOK\033[0m. zope.event confirmed')"
+
 
 else
   echo -e "\n---- Installing odoo pip requirements globally (no venv in use)"
@@ -770,7 +773,7 @@ fi
 # Get server IP address (first non-loopback IPv4)
 SERVER_IP=$(hostname -I | awk '{print $1}')
 
-echo -e "${GREEN}Enabling Odoo to start on system boot...${NC}"
+echo -e "${NC}Enabling Odoo to start on system boot...${NC}"
 
 sudo systemctl enable odoo-server > /dev/null 2>&1 && \
 echo -e "${GREEN}OK${NC}. Odoo service enabled successfully.${NC}" || \
@@ -855,8 +858,8 @@ else
 fi
 
 
-echo -e "${GREEN}-----------------------------------------------------------"
-echo -e "Script done. Odoo is now installed and running. Configuration summary:"
+echo -e "${GREEN}-----------------------------------------------------------${NC}"
+echo -e "${GREEN}All done!${NC} Odoo is now installed and running. Configuration summary:"
 echo -e "-----------------------------------------------------------${NC}\n"
 
 echo -e "${YELLOW} Odoo version:           ${NC}$ODOO_INSTALLED_VERSION"
@@ -871,7 +874,7 @@ echo -e "${YELLOW} Codebase location:      ${NC}/odoo/odoo-server"
 echo -e "${YELLOW} Python virtualenv:      ${NC}/odoo/venv"
 echo -e "${YELLOW} Full installation log:  ${NC}$FULL_LOGFILE_PATH"
 echo -e ""
-echo -e "\n${GREEN} Systemd service '${OE_CONFIG}' created and started.${NC}"
+echo -e "\n${GREEN} Systemd service ${NC}'${OE_CONFIG}'${GREEN} created and started.${NC}"
 echo -e " Start:     sudo systemctl start $OE_CONFIG"
 echo -e " Stop:      sudo systemctl stop $OE_CONFIG"
 echo -e " Restart:   sudo systemctl restart $OE_CONFIG"
