@@ -1,6 +1,6 @@
 #!/bin/bash
 ################################################################################
-# Script for installing Odoo on Ubuntu 16.04, 18.04, 20.04 and 22.04 (could be used for other version too)
+# Script for installing Odoo on Ubuntu 20.04 22.04 and 24.04
 # Author: Yenthe Van Ginneken
 #-------------------------------------------------------------------------------
 # This script will install Odoo on your Ubuntu server. It can install multiple Odoo instances
@@ -26,22 +26,19 @@ INSTALL_NGINX="True"
 ENABLE_SSL="True"
 # Provide Email to register ssl certificate from Certbot
 ADMIN_EMAIL="odoo@example.com"
-# This will use the Let's Encrypt staging server to avoid hitting rate limits.
-# Change to "False" when deploying to a live sever. Keep it "True" for testing purposes.
+# USE_LETSENCRYPT_STAGING will choose wether to use Let's Encrypt staging test server to avoid hitting rate limits.
+# Change to "False" when deploying to a live sever. Keep the value as "True" for testing purposes.
 USE_LETSENCRYPT_STAGING="True"
-
 # Choose the Odoo version which you want to install. For example: 16.0, 17.0, 18.0 or saas-22.
 # This corresponds to the branch name in the Odoo GitHub repository.
 OE_VERSION="16.0"
 
-# Select to use Python virtual environment or not. For moden Ubuntus 22.0 and later, this is recommended.
+# Select to use Python virtual environment or not. For moden Ubuntus 22.0 and later, this is mandatory.
 # Note: for Python Pip installations the script is calling pip as pip3.
-# For Virtual Environment installations, the script will use the pip from the virtual environment. $OE_VENV/bin/pip
+# For Virtual Environment installations, the script will use the pip from the virtual environment. See $OE_VENV/bin/pip
 USE_PYTHON_VENV="True"
 # Wkhtmltopdf is required for printing PDF reports in Odoo.
 INSTALL_WKHTMLTOPDF="True"
-# Set the default Odoo port (you still have to use -c /etc/odoo-server.conf for example to use this.)
-OE_PORT="8069"
 # Set this to True if you want to install the Odoo enterprise version!
 IS_ENTERPRISE="False"
 # Installs postgreSQL V14 instead of defaults (e.g V12 for Ubuntu 20/22) - this improves performance
@@ -50,6 +47,8 @@ INSTALL_POSTGRESQL_FOURTEEN="True"
 OE_SUPERADMIN="admin"
 # Set to "True" to generate a random password, "False" to use the variable in OE_SUPERADMIN
 GENERATE_RANDOM_PASSWORD="True"
+# Set the default Odoo port (you still have to use -c /etc/odoo-server.conf for example to use this.)
+OE_PORT="8069"
 # Set the default Odoo longpolling port (you still have to use -c /etc/odoo-server.conf for example to use this.)
 # Please note that the parameter in Odoo 11.0-15.00 is called longpolling_port. In Odoo 16.0 and later it is called gevent_port.
 LONGPOLLING_PORT="8072"
@@ -83,7 +82,7 @@ exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' | tee -a
 
 FULL_LOGFILE_PATH=$(readlink -f "$LOGFILE")
 echo -e "${NC}Starting Odoo installation. "
-echo -e "${GREEN}INFO:${NC} Logging enabled. Smart log to console and full log to ${BLUE}$LOGFILE${NC}."
+echo -e "${GREEN}INFO:${NC} Logging enabled. Smart log to console and full log to ${BLUE}$FULL_LOGFILE_PATH${NC}."
 
 echo -e "${GREEN}-----------------------------------------------------------${NC}"
 #
@@ -151,6 +150,55 @@ echo -e "    \n---- Installing frontend tools (Node.js related)"
 sudo apt-get install -y node-less 1>/dev/null
 echo -e "     ${GREEN}OK.${NC} Frontend dependencies installed."
 echo -e "     ${GREEN}OK.${NC} All operating system updates installed."
+
+# Snap environment preloading
+echo -e "\n==== Preloading snap environment (snapd, core snap, services)"
+
+sudo apt-get install -y snapd 1>/dev/null
+
+# 1. Install snapd and squashfs-tools
+echo -e "\n---- Installing snapd and squashfs-tools"
+if sudo apt-get install -y snapd squashfs-tools 1>/dev/null; then
+  echo -e "     ${GREEN}OK.${NC} snapd and squashfs-tools installed."
+else
+  echo -e "     ${RED}ERROR.${NC} Failed to install snapd. Certbot via snap will not work."
+fi
+
+# 2. Enable and start snapd.socket
+echo -e "\n---- Enabling and starting snapd.socket"
+sudo systemctl enable --now snapd.socket 1>/dev/null
+SNAPD_SOCKET_STATUS=$(systemctl is-active snapd.socket)
+if [ "$SNAPD_SOCKET_STATUS" = "active" ]; then
+  echo -e "     ${GREEN}OK.${NC} snapd.socket is active."
+else
+  echo -e "     ${RED}ERROR.${NC} snapd.socket failed to start. Status: $SNAPD_SOCKET_STATUS"
+fi
+
+# 3. Start snapd.apparmor (if available)
+echo -e "\n---- Starting snapd.apparmor (if present)"
+if systemctl list-unit-files | grep -q snapd.apparmor; then
+  sudo systemctl start snapd.apparmor 1>/dev/null
+  echo -e "     ${GREEN}OK.${NC} snapd.apparmor started."
+else
+  echo -e "     ${YELLOW}NOTE.${NC} snapd.apparmor not found. Skipping."
+fi
+
+# 4. Install core snap
+echo -e "\n---- Installing core snap"
+if sudo snap install core 1>/dev/null; then
+  echo -e "     ${GREEN}OK.${NC} core snap installed."
+else
+  echo -e "     ${RED}ERROR.${NC} Failed to install core snap."
+fi
+
+# 5. Refresh core snap
+echo -e "\n---- Refreshing core snap"
+if sudo snap refresh core 1>/dev/null; then
+  echo -e "     ${GREEN}OK.${NC} core snap refreshed."
+else
+  echo -e "     ${YELLOW}WARNING.${NC} core snap refresh failed or not needed."
+fi
+
 
 #--------------------------------------------------
 # Install Dependencies
@@ -299,25 +347,59 @@ echo -e "     ${BLUE}rtlcss${NC}   version: ${YELLOW}$(rtlcss -v)${NC}"
 if [ "$INSTALL_WKHTMLTOPDF" = "True" ]; then
   echo -e "\n---- Installing ${BLUE}wkhtmltopdf${NC} via AppImage"
   # Define architecture-specific URL
+  # Please note that Odoo requires a specific version of wkhtmltopdf with Qt WebKit support.
   WKHTML_VER="0.12.6.1-3"
-  OS_CODENAME=$(lsb_release -cs)  # jammy, focal, bullseye etc.
+
+  # Determine the OS codename and architecture
+  # 20.04 LTS	focal
+  # 22.04 LTS	jammy
+  # 24.04 LTS	noble
+
+  RAW_CODENAME=$(lsb_release -cs 2>/dev/null)
+  case "$RAW_CODENAME" in
+    jammy|focal)
+      OS_CODENAME="$RAW_CODENAME"
+      ;;
+    *)
+      echo -e "     ${YELLOW}WARNING${NC}: Codename '${RAW_CODENAME}' not supported by wkhtmltopdf packages. Falling back to 'jammy' (Ubuntu 22.04 LTS) version."
+      OS_CODENAME="jammy"
+      ;;
+  esac
+
   ARCH=$(dpkg --print-architecture)  # amd64, arm64 etc.
   WKHTML_DEB="wkhtmltox_${WKHTML_VER}.${OS_CODENAME}_${ARCH}.deb"
   WKHTML_URL="https://github.com/wkhtmltopdf/packaging/releases/download/${WKHTML_VER}/${WKHTML_DEB}"
 
+# Download the wkhtmltopdf .deb package
   curl -LO "$WKHTML_URL"
-  if [ -f "$WKHTML_DEB" ]; then
-    echo -e "     ${BLUE}INFO${NC}: Installing wkhtmltopdf dependencies...${NC}"
-    sudo apt-get install -y xfonts-75dpi xfonts-base xfonts-encodings xfonts-utils 1>/dev/null
-    echo -e "     ${GREEN}OK.${NC} wkhtmltopdf dependencies installed."
-    sudo dpkg -i "$WKHTML_DEB" || sudo apt-get install -f -y
-    echo -e "     ${GREEN}OK.${NC} wkhtmltopdf installed from ${BLUE}${WKHTML_DEB}.${NC}"
 
-    # Clean up downloaded .deb file
-    rm -f "$WKHTML_DEB"
+  # Check if the file exists and is larger than 1 MB (to catch corrupt or invalid downloads)
+  if [ -f "$WKHTML_DEB" ]; then
+    FILESIZE=$(stat -c%s "$WKHTML_DEB")
+    if [ "$FILESIZE" -gt 1000000 ]; then
+      echo -e "     ${BLUE}INFO${NC}: Installing wkhtmltopdf dependencies..."
+      sudo apt-get install -y xfonts-75dpi xfonts-base xfonts-encodings xfonts-utils 1>/dev/null
+      echo -e "     ${GREEN}OK.${NC} wkhtmltopdf dependencies installed."
+
+      # Attempt to install the .deb package
+      if sudo dpkg -i "$WKHTML_DEB"; then
+        echo -e "     ${GREEN}OK.${NC} wkhtmltopdf installed from ${BLUE}${WKHTML_DEB}${NC}"
+      else
+        echo -e "     ${YELLOW}WARNING${NC}: dpkg encountered issues, attempting to fix with apt-get..."
+        if sudo apt-get install -f -y 1>/dev/null; then
+          echo -e "     ${GREEN}OK.${NC} Broken dependencies fixed."
+        else
+          echo -e "     ${RED}ERROR${NC}: Failed to fix broken dependencies after dpkg error."
+        fi
+      fi
+    else
+      echo -e "     ${RED}ERROR${NC}: Downloaded file ${BLUE}${WKHTML_DEB}${NC} is too small (${FILESIZE} bytes). Possible corruption or 404 error."
+      rm -f "$WKHTML_DEB"
+    fi
   else
-    echo -e "     ${RED}ERROR${NC}: Failed to download wkhtmltopdf from ${WKHTML_URL}${NC}"
+    echo -e "     ${RED}ERROR${NC}: Failed to download wkhtmltopdf package from ${BLUE}${WKHTML_URL}${NC}"
   fi
+
 
   # Create symlink for wkhtmltoimage
   if ! command -v wkhtmltoimage >/dev/null 2>&1; then
@@ -558,12 +640,8 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
   echo -e "\n---- Installing ${BLUE}Certbot${NC} and enabling SSL/HTTPS"
   sudo apt-get update -y 1>/dev/null
   sudo apt-get install -y python3-certbot-nginx 1>/dev/null
-  sudo apt-get install -y snapd 1>/dev/null
   echo -e "     ${GREEN}OK.${NC} snapd installed.${NC}."
   sudo snap version 1>/dev/null || { echo -e "     ${RED}ERROR${NC}: Snap is not installed or not working. Please install snapd and try again."; exit 1; }
-  sudo snap install core 1>/dev/null
-  sudo snap refresh core 1>/dev/null
-  echo -e "     ${GREEN}OK.${NC} snap core refreshed.${NC}."
     #--------------------------------------------------
     # Validate snapd.socket status before using Certbot
     #--------------------------------------------------
@@ -579,7 +657,7 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
     #--------------------------------------------------
     # Installing Certbot using snap and validating
     #--------------------------------------------------
-    echo -e "${YELLOW}-- Installing Certbot via snap...${NC}"
+    echo -e "${YELLOW}-- Installing Certbot via snap. (This can take a long time, please be patient).${NC}"
     if sudo snap install --classic certbot 1>/dev/null; then
         echo -e "${GREEN}     OK${NC}. Certbot installed successfully via snap.${NC}"
     else
@@ -626,7 +704,7 @@ After=network.target postgresql.service
 Type=simple
 User=$OE_USER
 Group=$OE_USER
-ExecStart=${OE_VENV}/bin/python3 ${OE_HOME}/odoo-bin --config=/etc/${OE_CONFIG}.conf
+ExecStart=${OE_VENV}/bin/python3 ${OE_HOME_EXT}/odoo-bin --config=/etc/${OE_CONFIG}.conf
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure
