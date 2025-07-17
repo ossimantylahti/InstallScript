@@ -225,8 +225,8 @@ install_python() {
   local v=$1
   if ! command -v python${v} &>/dev/null; then
     sudo add-apt-repository -y ppa:deadsnakes/ppa  1>/dev/null
-    sudo apt update 1>/dev/null
-    sudo apt install -y python${v} python${v}-venv python${v}-dev 1>/dev/null
+    sudo apt-get update 1>/dev/null
+    sudo apt-get install -y python${v} python${v}-venv python${v}-dev 1>/dev/null
   fi
 }
 
@@ -262,17 +262,17 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   VENV_PYTHON_VERSION=$($OE_VENV/bin/python3 --version)
   echo -e "     ${YELLOW}$VENV_PYTHON_VERSION${NC}"
 
-  echo -e "\n---- Installing pip requirements in virtual environment"
+  echo -e "\n---- Installing odoo pip requirements in virtual environment"
   ${OE_VENV}/bin/pip install --quiet --upgrade pip setuptools
   ${OE_VENV}/bin/pip install --quiet wheel
   ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
   echo -e "     ${GREEN}OK.${NC} pip requirements installed in virtual environment."
   ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
   echo -e "     ${GREEN}OK.${NC} pip gevent installed."
-  ${OE_VENV}/bin/python3 -c "import zope.event; print('     OK: zope.event confirmed')"
+  ${OE_VENV}/bin/python3 -c "import zope.event; print('     OK. zope.event confirmed')"
 
 else
-  echo -e "\n---- Installing pip requirements globally (no venv in use)"
+  echo -e "\n---- Installing odoo pip requirements globally (no venv in use)"
   sudo -H pip3 install --quiet --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
   echo -e "     ${GREEN}OK.${NC} pip requirements installed globally."
   sudo pip3 install --quiet gevent greenlet zope.event
@@ -459,7 +459,7 @@ echo -e "     ${GREEN}OK.${NC} Configuration file created at ${BLUE}/etc/${OE_CO
 #--------------------------------------------------
 if [ $INSTALL_NGINX = "True" ]; then
   echo -e "\n---- Installing and setting up nginx"
-  sudo apt install -y nginx 1>/dev/null
+  sudo apt-get install -y nginx 1>/dev/null
   cat <<EOF > ~/odoo
 server {
   listen 80;
@@ -545,9 +545,9 @@ EOF
 
   sudo service nginx reload
   sudo su root -c "printf 'proxy_mode=True\n' >> /etc/${OE_CONFIG}.conf"
-  echo -e "     ${GREEN}OK.${NC} The Nginx server is up and running. Configuration can be found at ${BLUE}/etc/nginx/sites-available/$WEBSITE_NAME${NC}."
+  echo -e "     ${GREEN}OK${NC}. The Nginx server is up and running. Configuration can be found at ${BLUE}/etc/nginx/sites-available/$WEBSITE_NAME${NC}."
 else
-  echo "     ${YELLOW}INFO.${NC} Nginx is not installed due to user's choise."
+  echo "     ${YELLOW}INFO${NC}. Nginx is not installed due to user's choise."
 fi
 
 #--------------------------------------------------
@@ -557,7 +557,7 @@ fi
 if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != "odoo@example.com" ]  && [ $WEBSITE_NAME != "_" ];then
   echo -e "\n---- Installing ${BLUE}Certbot${NC} and enabling SSL/HTTPS"
   sudo apt-get update -y 1>/dev/null
-  sudo apt install -y snapd 1>/dev/null
+  sudo apt-get install -y snapd 1>/dev/null
   echo -e "     ${GREEN}OK.${NC} snapd installed.${NC}."
   sudo snap version 1>/dev/null || { echo -e "     ${RED}ERROR${NC}: Snap is not installed or not working. Please install snapd and try again."; exit 1; }
   sudo snap install core 1>/dev/null
@@ -567,11 +567,11 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
   sudo apt-get install -y python3-certbot-nginx 1>/dev/null
   if [ "$USE_LETSENCRYPT_STAGING" = "True" ]; then
     CERTBOT_STAGE_ARG="--staging"
-    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt staging test environment to avoid rate limits."
+    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt ${YELLOW}staging test${NC} environment to avoid rate limits."
     echo -e "     ${YELLOW}NOTE:${NC} This is for testing and development servers only." 
     echo -e "     ${YELLOW}NOTE:${NC} Use ${BLUE}USE_LETSENCRYPT_STAGING=False${NC} for production environment deployment."
   else
-    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt production environment."
+    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt ${YELLOW}production${NC} environment."
     CERTBOT_STAGE_ARG=""
   fi
   sudo certbot --nginx $CERTBOT_STAGE_ARG -d "$WEBSITE_NAME" --non-interactive --agree-tos -m "$ADMIN_EMAIL" --redirect --keep-until-expiring
@@ -634,7 +634,6 @@ done
 if ! sudo lsof -i :$OE_PORT | grep LISTEN >/dev/null; then
     echo -e "     ${RED}ERROR:${NC} Odoo is not listening on port $OE_PORT after waiting up to 5 seconds."
     echo "     please check logs at /var/log/${OE_USER}/${OE_CONFIG}.log"
-    exit 1
 fi
 
 echo -e "\n---- Testing HTTP on longpolling port ${LONGPOLLING_PORT}"
@@ -659,7 +658,6 @@ if [ -f /var/log/${OE_USER}/${OE_CONFIG}.log ]; then
   sudo tail -n 20 /var/log/${OE_USER}/${OE_CONFIG}.log
 else
   echo -e "     ${RED}ERROR${NC}: No log file found at /var/log/${OE_USER}/${OE_CONFIG}.log"
-  exit 1
 fi
 
 # Get server IP address (first non-loopback IPv4)
