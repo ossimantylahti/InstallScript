@@ -391,12 +391,19 @@ echo -e "     ${GREEN}OK.${NC} Home folder permissions set."
 
 sudo touch /etc/${OE_CONFIG}.conf
 echo -e "     ${GREEN}OK.${NC} Populating server configuration file"
+sudo su root -c "printf '[options]\n' >> /etc/${OE_CONFIG}.conf"
 sudo su root -c "printf 'db_user=${OE_USER}\n' >> /etc/${OE_CONFIG}.conf"
-sudo su root -c "printf '[options] \n; This is the password that allows database operations:\n' >> /etc/${OE_CONFIG}.conf"
+sudo su root -c "printf ';NOTE: This password allows database operations:\n' >> /etc/${OE_CONFIG}.conf"
 if [ $GENERATE_RANDOM_PASSWORD = "True" ]; then
     OE_SUPERADMIN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)
     echo -e "     ${GREEN}OK.${NC}  Generated random admin password"
 fi
+# Verification that oe_superadmin is set (fallback)
+if [ -z "$OE_SUPERADMIN" ]; then
+    OE_SUPERADMIN="admin"
+    echo -e "     ${YELLOW}NOTE.${NC} Admin password set to default 'admin' per user's choise."
+fi
+
 sudo su root -c "printf 'admin_passwd=${OE_SUPERADMIN}\n' >> /etc/${OE_CONFIG}.conf"
 
 if [ "$(echo "$OE_VERSION > 11.0" | bc -l)" -eq 1 ]; then
@@ -411,12 +418,12 @@ sudo su root -c "printf 'logfile=/var/log/${OE_USER}/${OE_CONFIG}.log\n' >> /etc
 ODOO_MAJOR_VERSION=$(echo "$OE_VERSION" | cut -d '.' -f1)
 
 if [ "$ODOO_MAJOR_VERSION" -ge 16 ]; then
-  echo -e "\n     Adding gevent_port = $LONGPOLLING_PORT and workers to config (Odoo $OE_VERSION)"
+  echo -e "     Adding gevent_port = $LONGPOLLING_PORT and workers to config (Odoo $OE_VERSION)"
   sudo su root -c "printf 'gevent_port=$LONGPOLLING_PORT\n' >> /etc/${OE_CONFIG}.conf"
   sudo su root -c "printf 'workers=$OE_WORKERS\n' >> /etc/${OE_CONFIG}.conf"
   sudo su root -c "printf 'max_cron_threads=$OE_MAX_CRON_THREADS\n' >> /etc/${OE_CONFIG}.conf"
 else
-  echo -e "\n     Adding longpolling_port=$LONGPOLLING_PORT to config (Odoo $OE_VERSION)"
+  echo -e "     Adding longpolling_port=$LONGPOLLING_PORT to config (Odoo $OE_VERSION)"
   sudo su root -c "printf 'longpolling_port=$LONGPOLLING_PORT\n' >> /etc/${OE_CONFIG}.conf"
 fi
 
@@ -426,10 +433,27 @@ if [ $IS_ENTERPRISE = "True" ]; then
 else
     sudo su root -c "printf 'addons_path=${OE_HOME_EXT}/addons,${OE_HOME}/custom/addons\n' >> /etc/${OE_CONFIG}.conf"
 fi
+
+#Default limits configuration for Odoo server
+#Soft memory limit is set to 512MB, hard limit to 1GB. This means that 
+# 1. If Odoo cron job uses more than 512MB of memory, it will be killed before the next run
+# 2. If Odoo cron job uses more than 1 gigagbyte of memory, it will be killed immediately
+# 3. If one request (like http request) takes more than 60 seconds CPU time (not real time!), it will be killed
+# 4. If one request (like report creation request) takes more than 120 real time, it will be killed
+
+sudo su root -c "printf 'limit_memory_soft=512000000\n' >> /etc/${OE_CONFIG}.conf"
+sudo su root -c "printf 'limit_memory_hard=1024000000\n' >> /etc/${OE_CONFIG}.conf"
+sudo su root -c "printf 'limit_time_cpu=60\n' >> /etc/${OE_CONFIG}.conf"
+sudo su root -c "printf 'limit_time_real=120\n' >> /etc/${OE_CONFIG}.conf"
+
+
 sudo chown $OE_USER:$OE_USER /etc/${OE_CONFIG}.conf
 sudo chmod 640 /etc/${OE_CONFIG}.conf
 
 echo -e "     ${GREEN}OK.${NC} Configuration file created at ${BLUE}/etc/${OE_CONFIG}.conf${NC}."
+#echo -e "\n---- Initializing database with base module"
+#sudo -u ${OE_USER} ${OE_VENV}/bin/python3 ${OE_HOME}/odoo-bin -d ${OE_DB_NAME} -i base --config=/etc/${OE_CONFIG}.conf --without-demo=all --stop-after-init
+
 #--------------------------------------------------
 # Install Nginx if needed
 #--------------------------------------------------
@@ -575,7 +599,7 @@ After=network.target postgresql.service
 Type=simple
 User=$OE_USER
 Group=$OE_USER
-ExecStart=/odoo/venv/bin/python3 /odoo/odoo-server/odoo-bin gevent --config=/etc/odoo-server.conf --workers=2 --max-cron-threads=2
+ExecStart=${OE_VENV}/bin/python3 ${OE_HOME}/odoo-bin --config=/etc/${OE_CONFIG}.conf
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure
