@@ -665,6 +665,12 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
         echo -e "${NC}     Please verify snapd is functioning and try again manually:${NC}"
         echo -e "${NC}     sudo snap install --classic certbot${NC}"
     fi
+    if snap list | grep -q certbot; then
+      echo -e "     ${GREEN}OK${NC}. certbot is found from snap list."
+    else
+      echo -e "     ${RED}ERROR${NC}. certbot not discoverable from snap list!"
+    fi
+
 
   if [ "$USE_LETSENCRYPT_STAGING" = "True" ]; then
     CERTBOT_STAGE_ARG="--staging"
@@ -778,6 +784,14 @@ echo -e "\n${YELLOW}Validating Odoo service configuration and status...${NC}"
 
 validation_failed=false
 
+# 0. Detect installed Odoo version from actual source
+ODOO_INSTALLED_VERSION=$("$OE_VENV/bin/python3" "$OE_HOME_EXT/odoo-bin" --version 2>/dev/null)
+
+if [ -z "$ODOO_INSTALLED_VERSION" ]; then
+  ODOO_INSTALLED_VERSION="Unknown (odoo-bin not found or not executable)"
+fi
+
+
 # 1. Check that the Odoo config file exists
 echo -e "${YELLOW}-- Reading Odoo configuration file: /etc/${OE_CONFIG}.conf${NC}"
 if sudo test -f /etc/${OE_CONFIG}.conf; then
@@ -841,12 +855,11 @@ else
 fi
 
 
-
 echo -e "${GREEN}-----------------------------------------------------------"
 echo -e "Script done. Odoo is now installed and running. Configuration summary:"
 echo -e "-----------------------------------------------------------${NC}\n"
 
-echo -e "${YELLOW} Odoo version:           ${NC}$ODOO_VERSION"
+echo -e "${YELLOW} Odoo version:           ${NC}$ODOO_INSTALLED_VERSION"
 echo -e "${YELLOW} Service user:           ${NC}$OE_USER"
 echo -e "${YELLOW} HTTP port:              ${NC}$OE_PORT"
 echo -e "${YELLOW} Longpolling port:       ${NC}$LONGPOLLING_PORT"
