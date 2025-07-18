@@ -1,6 +1,6 @@
 #!/bin/bash
 ################################################################################
-# Script for installing Odoo on Ubuntu 20.04 22.04 and 24.04
+# Script for installing Odoo on Ubuntu 22.04 and 24.04
 # Author: Yenthe Van Ginneken
 #-------------------------------------------------------------------------------
 # This script will install Odoo on your Ubuntu server. It can install multiple Odoo instances
@@ -43,7 +43,7 @@ INSTALL_WKHTMLTOPDF="True"
 IS_ENTERPRISE="False"
 # Installs postgreSQL V14 instead of defaults (e.g V12 for Ubuntu 20/22) - this improves performance
 INSTALL_POSTGRESQL_FOURTEEN="True"
-# Set the superadmin password - if GENERATE_RANDOM_PASSWORD is set to "True" we will automatically generate a random password, otherwise we use this one
+#Create odoo database with this name during installation. Leave empty to not to create a database.
 OE_SUPERADMIN="admin"
 # Set to "True" to generate a random password, "False" to use the variable in OE_SUPERADMIN
 GENERATE_RANDOM_PASSWORD="True"
@@ -68,12 +68,25 @@ OE_MAX_CRON_THREADS="2"
 # ---------------------------------------------------
 # END CONFIGURATION VARIABLES
 # ---------------------------------------------------
-# Set ANSI colors
-YELLOW='\033[1;33m'
-GREEN='\033[1;32m'
-RED='\033[1;31m'
-BLUE='\033[1;34m'
-NC='\033[0m' # No Color
+
+# ---------------------------------------------------
+# INSTALLATION HELPER FUNCTIONS
+# ---------------------------------------------------
+
+pretty_colours() {
+    # Function to set up pretty colors for terminal output
+    # This function is called at the beginning of the script to set up color variables
+    # so that they can be used throughout the script for better readability.
+    # ANSI escape codes are used to define colors.
+    echo -e "\nSetting up pretty colors for terminal output..."
+    # Set ANSI colors
+    YELLOW='\033[1;33m'
+    GREEN='\033[1;32m'
+    RED='\033[1;31m'
+    BLUE='\033[1;34m'
+    NC='\033[0m' # No Color
+}
+
 
 #--------------------------------------------------
 # Check function for package manager locks
@@ -126,12 +139,12 @@ check_dpkg_lock() {
         # Exit if everything is clear
         if [ -z "$UPGRADE_PROC" ] && [ -z "$SHUTDOWN_PROC" ] && [ -z "$LOCK_HELD" ]; then
             echo -e " done."
-            echo -e "     ${GREEN}OK.${NC} No blocking unattended-upgrade package operations detected. Proceeding with installation."
+            echo -e "     ${GREEN}OK${NC}. No blocking unattended-upgrade package operations detected. Proceeding with installation."
             return
         fi
 
         if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-            echo -e "\n${RED}FATAL ERROR:${NC} Timeout waiting for dpkg lock or unattended-upgrades to finish (waited ${TIMEOUT}s)"
+            echo -e "\n${RED}FATAL ERROR${NC}. Timeout waiting for dpkg lock or unattended-upgrades to finish (waited ${TIMEOUT}s)"
             echo -e "       Please investigate running package operations before retrying."
             echo -e "       Monitor with:"
             echo -e "         ${YELLOW}ps aux | grep unattended-upgrade${NC}"
@@ -148,10 +161,25 @@ check_dpkg_lock() {
     done
 }
 
+#--------------------------------------------------
+# BEGIN INSTALLATION LOGIC
+#--------------------------------------------------
 
+pretty_colours
+# Change to /tmp directory to avoid permission issues during installation
 cd /tmp || { echo -e "${RED}FATAL ERROR${NC}. Failed to change directory to /tmp"; exit 1; }
+# Enable logging with timestamps
+LOGFILE="odoo-install.log"
+exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' | tee -a "$LOGFILE") 2>&1
+
+FULL_LOGFILE_PATH=$(readlink -f "$LOGFILE")
+
 # --------------------------------------------------
-# Warm up Ubuntu by waiting for unattended upgrades and dpkg locks to finish
+# Warm up Ubuntu by waiting for unattended upgrades and ensuring that dpkg locks finish
+# This is important to avoid issues with package management during installation.
+# Especially needed for Ubuntu 22.04 and later, where unattended-upgrades may run automatically.
+# Without this check, the script may fail if dpkg is locked by an unattended upgrade process.
+# (Looking at you, Postgres)
 # --------------------------------------------------
 echo -e "${GREEN}---- Preparing the system: waiting for automatic updates to complete...${NC}"
 
@@ -164,13 +192,9 @@ check_dpkg_lock
 # Run apt update to refresh the package list after upgrades
 echo -e "Refreshing package index after unattended upgrades..."
 sudo apt-get update -y 1>/dev/null
-echo -e "     ${GREEN}OK.${NC} Package index updated. Proceeding with the installation."
+echo -e "     ${GREEN}OK${NC}. Package index updated. Proceeding with the installation."
 
-# Enable logging
-LOGFILE="odoo-install.log"
-exec > >(awk '{ print strftime("[%Y-%m-%d %H:%M:%S]"), $0; fflush(); }' | tee -a "$LOGFILE") 2>&1
 
-FULL_LOGFILE_PATH=$(readlink -f "$LOGFILE")
 echo -e "${NC}Starting Odoo installation. "
 echo -e "${GREEN}INFO:${NC} Logging enabled. Smart log to console and full log to ${BLUE}$FULL_LOGFILE_PATH${NC}."
 
@@ -201,45 +225,45 @@ fi
 echo -e "\n==== Updating Operating System and Repositories"
 echo -e "\n---- Adding Ubuntu LTS specific repositories"
 sudo add-apt-repository -y universe 1>/dev/null
-echo -e "     ${GREEN}OK.${NC} Universe repository added."
+echo -e "     ${GREEN}OK${NC}. Universe repository added."
 
 if (( $(echo "$OE_VERSION < 13.0" | bc -l) )); then
   echo "    ${GREEN}INFO${NC}: Adding Xenial repo for legacy Odoo version $OE_VERSION"
   sudo add-apt-repository -y "deb http://mirrors.kernel.org/ubuntu/ xenial main" 1>/dev/null
   sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 40976EAF437D05B5 1>/dev/null
   sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 3B4FE6ACC0B21F32 1>/dev/null
-  echo -e "    ${GREEN}OK.${NC} Legacy Odoo Linux repository support added.\n"
+  echo -e "    ${GREEN}OK${NC}. Legacy Odoo Linux repository support added.\n"
 fi
 
 sudo apt-get update -y 1>/dev/null
 sudo apt-get upgrade -y 1>/dev/null
-echo -e "     ${GREEN}OK.${NC} System packages updated."
+echo -e "     ${GREEN}OK${NC}. System packages updated."
 
 # Development tools and compilers
 echo -e "    \n---- Installing build tools and compilers"
 sudo apt-get install -y gcc build-essential python3-dev python3-venv python3-wheel python3-setuptools 1>/dev/null
-echo -e "     ${GREEN}OK.${NC} Build tools installed."
+echo -e "     ${GREEN}OK${NC}. Build tools installed."
 
 # PostgreSQL and authentication libraries
 echo -e "    \n---- Installing PostgreSQL and authentication libraries"
 sudo apt-get install -y libpq-dev libsasl2-dev libldap2-dev libssl-dev 1>/dev/null
-echo -e "     ${GREEN}OK.${NC} PostgreSQL and authentication dependencies installed."
+echo -e "     ${GREEN}OK${NC}. PostgreSQL and authentication dependencies installed."
 
 # Python & Odoo support packages
 echo -e "    \n---- Installing core Python & Odoo dependency packages"
 sudo apt-get install -y python3-cffi bc git wget plocate gdebi 1>/dev/null
-echo -e "     ${GREEN}OK.${NC} Core Python/Odoo packages installed."
+echo -e "     ${GREEN}OK${NC}. Core Python/Odoo packages installed."
 
 # Web rendering and compression libraries
 echo -e "    \n---- Installing rendering and compression libraries"
 sudo apt-get install -y libxslt-dev libzip-dev libpng-dev libjpeg-dev 1>/dev/null
-echo -e "     ${GREEN}OK.${NC} Rendering and compression libraries installed."
+echo -e "     ${GREEN}OK${NC}. Rendering and compression libraries installed."
 
 # Frontend tools
 echo -e "    \n---- Installing frontend tools (Node.js related)"
 sudo apt-get install -y node-less 1>/dev/null
-echo -e "     ${GREEN}OK.${NC} Frontend dependencies installed."
-echo -e "     ${GREEN}OK.${NC} All operating system updates installed."
+echo -e "     ${GREEN}OK${NC}. Frontend dependencies installed."
+echo -e "     ${GREEN}OK${NC}. All operating system updates installed."
 
 # Snap environment preloading
 echo -e "\n==== Preloading snap environment (snapd, core snap, services)"
@@ -249,9 +273,9 @@ sudo apt-get install -y snapd 1>/dev/null
 # 1. Install snapd and squashfs-tools
 echo -e "\n---- Installing snapd and squashfs-tools"
 if sudo apt-get install -y snapd squashfs-tools 1>/dev/null; then
-  echo -e "     ${GREEN}OK.${NC} snapd and squashfs-tools installed."
+  echo -e "     ${GREEN}OK${NC}. snapd and squashfs-tools installed."
 else
-  echo -e "     ${RED}ERROR.${NC} Failed to install snapd. Certbot via snap will not work."
+  echo -e "     ${RED}ERROR${NC}. Failed to install snapd. Certbot via snap will not work."
 fi
 
 # 2. Enable and start snapd.socket
@@ -259,16 +283,16 @@ echo -e "\n---- Enabling and starting snapd.socket"
 sudo systemctl enable --now snapd.socket 1>/dev/null
 SNAPD_SOCKET_STATUS=$(systemctl is-active snapd.socket)
 if [ "$SNAPD_SOCKET_STATUS" = "active" ]; then
-  echo -e "     ${GREEN}OK.${NC} snapd.socket is active."
+  echo -e "     ${GREEN}OK${NC}. snapd.socket is active."
 else
-  echo -e "     ${RED}ERROR.${NC} snapd.socket failed to start. Status: $SNAPD_SOCKET_STATUS"
+  echo -e "     ${RED}ERROR${NC}. snapd.socket failed to start. Status: $SNAPD_SOCKET_STATUS"
 fi
 
 # 3. Start snapd.apparmor (if available)
 echo -e "\n---- Starting snapd.apparmor (if present)"
 if systemctl list-unit-files | grep -q snapd.apparmor; then
   sudo systemctl start snapd.apparmor 1>/dev/null
-  echo -e "     ${GREEN}OK.${NC} snapd.apparmor started."
+  echo -e "     ${GREEN}OK${NC}. snapd.apparmor started."
 else
   echo -e "     ${YELLOW}NOTE.${NC} snapd.apparmor not found. Skipping."
 fi
@@ -276,20 +300,21 @@ fi
 # 4. Install core snap
 echo -e "\n---- Installing core snap"
 if sudo snap install core 1>/dev/null; then
-  echo -e "     ${GREEN}OK.${NC} core snap installed."
+  echo -e "     ${GREEN}OK${NC}. core snap installed."
 else
-  echo -e "     ${RED}ERROR.${NC} Failed to install core snap."
+  echo -e "     ${RED}ERROR${NC}. Failed to install core snap."
 fi
 
 # 5. Refresh core snap
 echo -e "\n---- Refreshing core snap"
-if sudo snap refresh core 1>/dev/null; then
-  echo -e ""
-  echo -e "     ${GREEN}OK.${NC} core snap refreshed."
+SNAP_OUTPUT=$(sudo snap refresh core 2>&1)
+if [ $? -eq 0 ]; then
+  echo -e "     ${SNAP_OUTPUT}"
+  echo -e "     ${GREEN}OK${NC}. core snap refreshed."
 else
   echo -e "     ${YELLOW}WARNING.${NC} core snap refresh failed or not needed."
+  echo -e "     Details: ${SNAP_OUTPUT}"
 fi
-
 
 #--------------------------------------------------
 # Install timezone management packages
@@ -297,7 +322,7 @@ fi
 echo "---- Ensuring server timezone data is up-to-date"
 sudo apt-get install -y locales libc6 tzdata util-linux 1>/dev/null
 sudo dpkg-reconfigure --frontend noninteractive tzdata
-echo -e "     ${GREEN}OK.${NC} Server timezone data is updated."
+echo -e "     ${GREEN}OK${NC}. Server timezone data is updated."
 
 #--------------------------------------------------
 # Create user and directories
@@ -310,13 +335,13 @@ sudo adduser $OE_USER sudo
 # Just in case: fix home directory ownership 
 sudo chown -R $OE_USER:$OE_USER $OE_HOME
 
-echo -e "     ${GREEN}OK.${NC} Created system user ${BLUE}$OE_USER${NC} with home directory ${BLUE}/odoo${NC}."
+echo -e "     ${GREEN}OK${NC}. Created system user ${BLUE}$OE_USER${NC} with home directory ${BLUE}/odoo${NC}."
 
 echo -e "\n---- Create Log directory"
 sudo mkdir /var/log/$OE_USER
 sudo chown $OE_USER:$OE_USER /var/log/$OE_USER
 
-echo -e "     ${GREEN}OK.${NC} Log directory created at ${BLUE}/var/log/$OE_USER${NC}."
+echo -e "     ${GREEN}OK${NC}. Log directory created at ${BLUE}/var/log/$OE_USER${NC}."
 
 #--------------------------------------------------
 # Install PostgreSQL Server
@@ -326,47 +351,54 @@ echo -e "\n---- Installing PostgreSQL Server"
 # Wait for dpkg frontend lock to be released
 check_dpkg_lock
 
-if [ $INSTALL_POSTGRESQL_FOURTEEN = "True" ]; then
-    echo -e "     ${YELLOW}NOTE${NC} Proceeding with postgreSQL V14 due to the user's choise"
-    sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc|sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
-    sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+#--------------------------------------------------
+# Install PostgreSQL Server
+#--------------------------------------------------
+echo -e "\n---- Installing PostgreSQL Server"
+
+if [ "$INSTALL_POSTGRESQL_FOURTEEN" = "True" ]; then
+    echo -e "     ${YELLOW}NOTE${NC} Proceeding with PostgreSQL V14 due to the user's choice"
+    sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
+    sudo sh -c "echo 'deb http://apt.postgresql.org/pub/repos/apt \$(lsb_release -cs)-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
     sudo apt-get update 1>/dev/null
     sudo apt-get install -y postgresql-14 1>/dev/null
 else
-    echo -e "     ${YELLOW}NOTE${NC} Proceeding with the default postgreSQL version based on Linux version"
+    echo -e "     ${YELLOW}NOTE${NC} Proceeding with the default PostgreSQL version based on Linux version"
     sudo apt-get install -y postgresql postgresql-server-dev-all 1>/dev/null
 fi
 
-
 if ! command -v psql &> /dev/null; then
-  echo -e "${RED}FATAL ERROR${NC} PostgreSQL installation failed. psql command not found. Aborting installation."
+  echo -e "${RED}FATAL ERROR${NC} PostgreSQL installation failed. 'psql' command not found. Aborting installation."
   exit 1
 fi
 
-echo -e "     ${GREEN}OK.${NC} PostgreSQL server installed successfully."
+echo -e "     ${GREEN}OK${NC}. PostgreSQL server installed successfully."
 POSTGRES_VERSION=$(psql --version | awk '{print $3}')
-echo -e "     ${YELLOW}NOTE${NC} PostgreSQL version:${BLUE} $POSTGRES_VERSION${NC}"
+echo -e "     ${YELLOW}NOTE${NC} PostgreSQL version: ${BLUE}$POSTGRES_VERSION${NC}"
+
+#--------------------------------------------------
+# Create PostgreSQL Role for Odoo
+#--------------------------------------------------
+echo -e "\n---- Creating Odoo PostgreSQL Role"
+
+if sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname = '$OE_USER'" | grep -q 1; then
+    echo -e "     ${YELLOW}NOTE${NC} Role '$OE_USER' already exists. Skipping creation."
+else
+    sudo -u postgres createuser -s "$OE_USER"
+    echo -e "     ${GREEN}OK${NC}. Role '$OE_USER' created."
+fi
 
 
-echo -e "\n---- Creating Odoo PostgreSQL User "
-sudo su - postgres -c "cd /tmp && createuser -s $OE_USER" 2> /dev/null || true
-sudo -u postgres psql -c "DO \$\$ BEGIN
-                            IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${OE_USER}') THEN
-                                CREATE ROLE ${OE_USER} WITH LOGIN CREATEDB;
-                            END IF;
-                          END \$\$;"
-                          
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'odoo'" | grep -q 1 || \
-sudo -u postgres createdb -O ${OE_USER} odoo
-
+#--------------------------------------------------
+# Verify PostgreSQL Access
+#--------------------------------------------------
 if ! id "postgres" &>/dev/null; then
-  echo -e "${RED}FATAL ERROR${NC} PostgreSQL user 'postgres' not found. Check PostgreSQL installation. Aborting instsallation."
+  echo -e "${RED}FATAL ERROR${NC} PostgreSQL user 'postgres' not found. Check PostgreSQL installation. Aborting installation."
   exit 1
 fi
 
-echo -e "     ${GREEN}OK.${NC} Odoo postgresql user created."
-echo -e "     ${YELLOW}NOTE${NC} PostgreSQL user:${BLUE} $OE_USER${NC}"
-sudo -u ${OE_USER} -H psql -d odoo -c '\q' || echo -e "     ${RED}WARNING${NC} Odoo user cannot access the database."
+echo -e "     ${GREEN}OK${NC}. PostgreSQL setup complete. Role: ${BLUE}$OE_USER${NC}"
+
 
 #--------------------------------------------------
 # Install Python
@@ -405,13 +437,13 @@ install_python "${PYTHON_VER}"
 for pkg in gcc libpq-dev libsasl2-dev libldap2-dev libssl-dev; do
     dpkg -s $pkg &> /dev/null || { echo "Missing system packet: $pkg"; exit 1; }
 done
-echo -e "     ${GREEN}OK.${NC} Python ${BLUE}$PYTHON_VER${NC} installed successfully."
+echo -e "     ${GREEN}OK${NC}. Python ${BLUE}$PYTHON_VER${NC} installed successfully."
 
 if [ "$USE_PYTHON_VENV" = "True" ]; then
   echo -e "\n---- Creating Python virtual environment at ${BLUE}${OE_VENV}${NC} "
 
   python${PYTHON_VER} -m venv ${OE_VENV}
-  echo -e "     ${GREEN}OK.${NC} Python virtual environment created."
+  echo -e "     ${GREEN}OK${NC}. Python virtual environment created."
 
   echo -e "\n---- Checking Python version used in venv"
   VENV_PYTHON_VERSION=$($OE_VENV/bin/python3 --version)
@@ -421,21 +453,20 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   ${OE_VENV}/bin/pip install --quiet --upgrade pip setuptools
   ${OE_VENV}/bin/pip install --quiet wheel
   ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
-  echo -e "     ${GREEN}OK.${NC} pip requirements installed in virtual environment."
+  echo -e "     ${GREEN}OK${NC}. pip requirements installed in virtual environment."
   ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
-  echo -e "     ${GREEN}OK.${NC} pip gevent installed."
+  echo -e "     ${GREEN}OK${NC}. pip gevent installed."
   ${OE_VENV}/bin/python3 -c "import zope.event; print('     \033[0;32mOK\033[0m. zope.event confirmed')"
-
 
 else
   echo -e "\n---- Installing odoo pip requirements globally (no venv in use)"
   sudo -H pip3 install --quiet --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
-  echo -e "     ${GREEN}OK.${NC} pip requirements installed globally."
+  echo -e "     ${GREEN}OK${NC}. pip requirements installed globally."
   sudo pip3 install --quiet gevent greenlet zope.event
-  echo -e "     ${GREEN}OK.${NC} pip gevent installed globally."
+  echo -e "     ${GREEN}OK${NC}. pip gevent installed globally."
 fi
 if $OE_VENV/bin/python3 -m pip show gevent >/dev/null 2>&1; then
-  echo -e "     ${GREEN}OK.${NC} gevent is installed and ready for workers mode."
+  echo -e "     ${GREEN}OK${NC}. gevent is installed and ready for workers mode."
 else
   echo -e "     ${YELLOW}WARNING:${NC} gevent not found. Odoo uses werkzeug and does not support workers or longpolling."
 fi
@@ -443,7 +474,7 @@ fi
 echo -e "\n---- Installing ${BLUE}NodeJS, NPM${NC} and ${BLUE}rtlcss${NC} for RTL stylesheet support"
 sudo apt-get install -y nodejs npm 1>/dev/null
 sudo npm install -g rtlcss 1>/dev/null
-echo -e "     ${GREEN}OK.${NC} NodeJS, NPM and rtlcss installed."
+echo -e "     ${GREEN}OK${NC}. NodeJS, NPM and rtlcss installed."
 echo -e "     ${YELLOW}NOTE${NC} Installed versions:"
 echo -e "     ${BLUE}NodeJS${NC}   version: ${YELLOW}$(node -v)${NC}"
 echo -e "     ${BLUE}NPM${NC}      version: ${YELLOW}$(npm -v)${NC}"
@@ -487,15 +518,15 @@ if [ "$INSTALL_WKHTMLTOPDF" = "True" ]; then
     if [ "$FILESIZE" -gt 1000000 ]; then
       echo -e "     ${BLUE}INFO${NC}: Installing wkhtmltopdf dependencies..."
       sudo apt-get install -y xfonts-75dpi xfonts-base xfonts-encodings xfonts-utils 1>/dev/null
-      echo -e "     ${GREEN}OK.${NC} wkhtmltopdf dependencies installed."
+      echo -e "     ${GREEN}OK${NC}. wkhtmltopdf dependencies installed."
 
       # Attempt to install the .deb package
       if sudo dpkg -i "$WKHTML_DEB"; then
-        echo -e "     ${GREEN}OK.${NC} wkhtmltopdf installed from ${BLUE}${WKHTML_DEB}${NC}"
+        echo -e "     ${GREEN}OK${NC}. wkhtmltopdf installed from ${BLUE}${WKHTML_DEB}${NC}"
       else
         echo -e "     ${YELLOW}WARNING${NC}: dpkg encountered issues, attempting to fix with apt-get..."
         if sudo apt-get install -f -y 1>/dev/null; then
-          echo -e "     ${GREEN}OK.${NC} Broken dependencies fixed."
+          echo -e "     ${GREEN}OK${NC}. Broken dependencies fixed."
         else
           echo -e "     ${RED}ERROR${NC}: Failed to fix broken dependencies after dpkg error."
         fi
@@ -508,7 +539,6 @@ if [ "$INSTALL_WKHTMLTOPDF" = "True" ]; then
     echo -e "     ${RED}ERROR${NC}: Failed to download wkhtmltopdf package from ${BLUE}${WKHTML_URL}${NC}"
   fi
 
-
   # Create symlink for wkhtmltoimage
   if ! command -v wkhtmltoimage >/dev/null 2>&1; then
     sudo ln -sf /usr/local/bin/wkhtmltopdf /usr/local/bin/wkhtmltoimage
@@ -516,7 +546,7 @@ if [ "$INSTALL_WKHTMLTOPDF" = "True" ]; then
   fi
 
   if command -v wkhtmltopdf &> /dev/null; then
-    echo -e "     ${GREEN}OK.${NC} wkhtmltopdf installed to ${BLUE}/usr/local/bin/wkhtmltopdf${NC}"
+    echo -e "     ${GREEN}OK${NC}. wkhtmltopdf installed to ${BLUE}/usr/local/bin/wkhtmltopdf${NC}"
     echo -e "  wkhtmltopdf version: ${YELLOW}$(wkhtmltopdf -V | awk '{print $2}')${NC}"
   else
     echo -e "     ${YELLOW}WARNING${NC}: wkhtmltopdf installation may have failed. Binary not found."
@@ -528,11 +558,17 @@ fi
 sudo ln -s /usr/local/bin/wkhtmltopdf /usr/bin
 sudo ln -s /usr/local/bin/wkhtmltoimage /usr/bin
 
-echo -e "     ${GREEN}OK.${NC} wkhtmltopdf installed."
-echo -e "     Installed version:"
-echo -e "     ${BLUE}wkhtmltopdf${NC} version: ${YELLOW}$(wkhtmltopdf -V | awk '{print $2}')${NC}"
-wkhtmltopdf -V
-file /usr/local/bin/wkhtmltopdf
+echo -e "     ${GREEN}OK${NC}. wkhtmltopdf installed."
+
+WKHTML_VERSION=$(wkhtmltopdf --version 2>/dev/null)
+WKHTML_PATH=$(which wkhtmltopdf 2>/dev/null)
+
+if [ -n "$WKHTML_VERSION" ] && [ -n "$WKHTML_PATH" ]; then
+  echo -e "     Version: $WKHTML_VERSION"
+  echo -e "     Path:    $WKHTML_PATH"
+else
+  echo -e "     ${YELLOW}WARNING.${NC} Unable to determine wkhtmltopdf version or path."
+fi
 
 #--------------------------------------------------
 # Install ODOO
@@ -548,45 +584,46 @@ if [ $IS_ENTERPRISE = "True" ]; then
     sudo ln -s /usr/bin/nodejs /usr/bin/node
     sudo su $OE_USER -c "mkdir $OE_HOME/enterprise"
     sudo su $OE_USER -c "mkdir $OE_HOME/enterprise/addons"
-    echo -e "     ${GREEN}OK.${NC} Symlinks created."
+    echo -e "     ${GREEN}OK${NC}. Symlinks created."
 
     GITHUB_RESPONSE=$(sudo git clone --depth 1 --branch $OE_VERSION https://www.github.com/odoo/enterprise "$OE_HOME/enterprise/addons" 2>&1)
     while [[ $GITHUB_RESPONSE == *"Authentication"* ]]; do
         echo "------------------------WARNING------------------------------"
         echo "Your authentication with Github has failed! Please try again."
-        printf "In order to clone and install the Odoo enterprise version you \nneed to be an offical Odoo partner and you need access to\nhttp://github.com/odoo/enterprise.\n"
+        echo "In order to clone and install the Odoo enterprise version you"
+        echo "need to be an offical Odoo partner and you need access to\nhttp://github.com/odoo/enterprise.\n"
         echo "TIP: Press ctrl+c to stop this script."
         echo "-------------------------------------------------------------"
         echo " "
         GITHUB_RESPONSE=$(sudo git clone --depth 1 --branch $OE_VERSION https://www.github.com/odoo/enterprise "$OE_HOME/enterprise/addons" 2>&1)
     done
 
-    echo -e "\n     ${GREEN}OK.${NC} Added Enterprise code under $OE_HOME/enterprise/addons"
+    echo -e "\n     ${GREEN}OK${NC}. Added Enterprise code under $OE_HOME/enterprise/addons"
     echo -e "\n---- Installing Enterprise specific libraries"
     sudo -H pip3 install num2words ofxparse dbfread ebaysdk firebase_admin pyOpenSSL
     sudo npm install -g less 1>/dev/null
     sudo npm install -g less-plugin-clean-css 1>/dev/null
-    echo -e "     ${GREEN}OK.${NC} Enterprise specific libraries installed."
+    echo -e "     ${GREEN}OK${NC}. Enterprise specific libraries installed."
 fi
 
 echo -e "\n---- Creating custom module directory"
 sudo su $OE_USER -c "mkdir $OE_HOME/custom"
 sudo su $OE_USER -c "mkdir $OE_HOME/custom/addons"
-echo -e "     ${GREEN}OK.${NC} Custom module directory created at ${BLUE}$OE_HOME/custom/addons${NC}."
+echo -e "     ${GREEN}OK${NC}. Custom module directory created at ${BLUE}$OE_HOME/custom/addons${NC}."
 
 echo -e "\n---- Setting permissions on home folder"
 sudo chown -R $OE_USER:$OE_USER $OE_HOME/*
-echo -e "     ${GREEN}OK.${NC} Home folder permissions set."
+echo -e "     ${GREEN}OK${NC}. Home folder permissions set."
 
 
 sudo touch /etc/${OE_CONFIG}.conf
-echo -e "     ${GREEN}OK.${NC} Populating server configuration file"
+echo -e "     ${GREEN}OK${NC}. Populating server configuration file"
 sudo su root -c "printf '[options]\n' >> /etc/${OE_CONFIG}.conf"
 sudo su root -c "printf 'db_user=${OE_USER}\n' >> /etc/${OE_CONFIG}.conf"
 sudo su root -c "printf ';NOTE: This password allows database operations:\n' >> /etc/${OE_CONFIG}.conf"
 if [ $GENERATE_RANDOM_PASSWORD = "True" ]; then
     OE_SUPERADMIN=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)
-    echo -e "     ${GREEN}OK.${NC}  Generated random admin password"
+    echo -e "     ${GREEN}OK${NC}.  Generated random admin password"
 fi
 # Verification that oe_superadmin is set (fallback)
 if [ -z "$OE_SUPERADMIN" ]; then
@@ -640,12 +677,12 @@ sudo su root -c "printf 'limit_time_real=120\n' >> /etc/${OE_CONFIG}.conf"
 sudo chown $OE_USER:$OE_USER /etc/${OE_CONFIG}.conf
 sudo chmod 640 /etc/${OE_CONFIG}.conf
 
-echo -e "     ${GREEN}OK.${NC} Configuration file created at ${BLUE}/etc/${OE_CONFIG}.conf${NC}."
+echo -e "     ${GREEN}OK${NC}. Configuration file created at ${BLUE}/etc/${OE_CONFIG}.conf${NC}."
 #echo -e "\n---- Initializing database with base module"
 #sudo -u ${OE_USER} ${OE_VENV}/bin/python3 ${OE_HOME}/odoo-bin -d ${OE_DB_NAME} -i base --config=/etc/${OE_CONFIG}.conf --without-demo=all --stop-after-init
 
 #--------------------------------------------------
-# Install Nginx if needed
+# Install Nginx per user's selection
 #--------------------------------------------------
 if [ $INSTALL_NGINX = "True" ]; then
   echo -e "\n---- Installing and setting up nginx"
@@ -735,7 +772,7 @@ EOF
 
   sudo service nginx reload
   sudo su root -c "printf 'proxy_mode=True\n' >> /etc/${OE_CONFIG}.conf"
-  echo -e "     ${GREEN}OK${NC}. The Nginx server is up and running. Configuration can be found at ${BLUE}/etc/nginx/sites-available/$WEBSITE_NAME${NC}."
+  echo -e "     ${GREEN}OK${NC}. Nginx server is up and running. Configuration can be found at ${BLUE}/etc/nginx/sites-available/$WEBSITE_NAME${NC}."
 else
   echo "     ${YELLOW}INFO${NC}. Nginx is not installed due to user's choise."
 fi
@@ -748,7 +785,7 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
   echo -e "\n---- Installing ${BLUE}Certbot${NC} and enabling SSL/HTTPS"
   sudo apt-get update -y 1>/dev/null
   sudo apt-get install -y python3-certbot-nginx 1>/dev/null
-  echo -e "     ${GREEN}OK.${NC} snapd installed.${NC}."
+  echo -e "     ${GREEN}OK${NC}. snapd installed.${NC}."
   sudo snap version 1>/dev/null || { echo -e "     ${RED}ERROR${NC}: Snap is not installed or not working. Please install snapd and try again."; exit 1; }
     #--------------------------------------------------
     # Validate snapd.socket status before using Certbot
@@ -792,7 +829,7 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
   sudo certbot --nginx $CERTBOT_STAGE_ARG -d "$WEBSITE_NAME" --non-interactive --agree-tos -m "$ADMIN_EMAIL" --redirect --keep-until-expiring
 
   sudo service nginx reload
-  echo -e "     ${GREEN}OK.${NC} Certbot is installed and SSL/HTTPS enabled for ${BLUE}$WEBSITE_NAME${NC}."
+  echo -e "     ${GREEN}OK${NC}. Certbot is installed and SSL/HTTPS enabled for ${BLUE}$WEBSITE_NAME${NC}."
   if [ "$USE_LETSENCRYPT_STAGING" = "True" ]; then
     echo -e "     ${YELLOW}NOTE${NC}: Certbot is using the Let's Encrypt staging and thus web browser can show a certificate warning."
   fi
@@ -837,17 +874,17 @@ echo -e "     ${BLUE}INFO.${NC} Starting Odoo Service"
 
 echo -e "     ${BLUE}INFO.${NC} Waiting for Odoo to start and listen listening on port $OE_PORT"
 
-# Wait for Odoo to start and listen on the specified port
+# Wait for Odoo to start and listen on the desired port
 for i in {1..5}; do
     if sudo lsof -i :$OE_PORT | grep LISTEN >/dev/null; then
-        echo -e "     ${GREEN}OK.${NC} Odoo is now running and listening on port " $OE_PORT
+        echo -e "     ${GREEN}OK${NC}. Odoo is now running and listening on port $OE_PORT${NC}."
         break
     fi
     sleep 1
 done
 
 if ! sudo lsof -i :$OE_PORT | grep LISTEN >/dev/null; then
-    echo -e "     ${RED}ERROR:${NC} Odoo is not listening on port $OE_PORT after waiting up to 5 seconds."
+    echo -e "     ${RED}ERROR${NC}. Odoo is not listening on port $OE_PORT after waiting up to 5 seconds."
     echo "     please check logs at /var/log/${OE_USER}/${OE_CONFIG}.log"
 fi
 
@@ -856,9 +893,9 @@ echo -e "\n---- Testing HTTP on longpolling port ${LONGPOLLING_PORT}"
 # Check if longpolling_port is defined in the config
 if grep -q -E "^\s*longpolling_port\s*=\s*${LONGPOLLING_PORT}\b" "$ODOO_CONF"; then
     if curl -s --max-time 2 http://localhost:${LONGPOLLING_PORT} > /dev/null; then
-        echo -e "     ${GREEN}OK.${NC} Longpolling or gevent port ${LONGPOLLING_PORT} is responding."
+        echo -e "     ${GREEN}OK${NC}. Longpolling or gevent port ${LONGPOLLING_PORT} is responding."
     else
-        echo -e "     ${RED}ERROR.${NC} Longpolling gevent port ${LONGPOLLING_PORT} is not responding."
+        echo -e "     ${RED}ERROR${NC}. Longpolling gevent port ${LONGPOLLING_PORT} is not responding."
         echo -e "     Checking active listeners for diagnostic purposes:"
         sudo ss -ltnp | grep ":${LONGPOLLING_PORT}" || echo "     No process is currently listening on port ${LONGPOLLING_PORT}"
     fi
@@ -869,7 +906,7 @@ fi
 
 
 if pgrep -f odoo-bin >/dev/null; then
-    echo -e "     ${GREEN}OK.${NC} Odoo process is running."
+    echo -e "     ${GREEN}OK${NC}. Odoo process is running."
 else
     echo -e "     ${YELLOW}Warning${NC}: Odoo process not found even though port is open."
 fi
@@ -944,20 +981,20 @@ else
 fi
 
 # 5. Check if Odoo is listening on HTTP port
-echo -e "\n${YELLOW}-- Verifying if Odoo is listening on port ${OE_PORT} (HTTP)...${NC}"
+echo -e "\n${YELLOW}-- Verifying if Odoo is listening on port ${OE_PORT} (${YELLOW}HTTP${NC})...${NC}"
 if sudo lsof -i :${OE_PORT} | grep LISTEN >/dev/null; then
-    echo -e "${GREEN}Odoo is listening on port ${OE_PORT}.${NC}"
+    echo -e "${GREEN}OK${NC}. Odoo is listening on port ${OE_PORT}.${NC}"
 else
-    echo -e "${RED}Nothing is listening on port ${OE_PORT}.${NC}"
+    echo -e "${RED}ERROR${NC}. Nothing is listening on port ${OE_PORT}.${NC}"
     validation_failed=true
 fi
 
 # 6. Check if Odoo is listening on longpolling port
-echo -e "\n${YELLOW}-- Verifying if Odoo is listening on port ${LONGPOLLING_PORT} (Longpolling)...${NC}"
+echo -e "\n${YELLOW}-- Verifying if Odoo is listening on port ${LONGPOLLING_PORT} (${YELLOW}Longpolling${NC})...${NC}"
 if sudo lsof -i :${LONGPOLLING_PORT} | grep LISTEN >/dev/null; then
-    echo -e "${GREEN}Odoo is listening on port ${LONGPOLLING_PORT}.${NC}"
+    echo -e "${GREEN}OK${NC}. Odoo is listening on port ${LONGPOLLING_PORT}.${NC}"
 else
-    echo -e "${RED}Nothing is listening on port ${LONGPOLLING_PORT}.${NC}"
+    echo -e "${RED}ERROR${NC}. Nothing is listening on port ${LONGPOLLING_PORT}.${NC}"
     validation_failed=true
 fi
 
@@ -966,7 +1003,7 @@ if $validation_failed; then
     echo -e "\n${RED}Validation failed.${NC} Please fix the above errors before proceeding.${NC}"
     exit 1
 else
-    echo -e "\n${GREEN}Validation successfull.${NC} All checks passed.${NC}"
+    echo -e "\n${GREEN}Validation successful.${NC} All checks passed. ${YELLOW}Congratulations!${NC}"
 fi
 
 
