@@ -80,16 +80,46 @@ NC='\033[0m' # No Color
 #--------------------------------------------------
 check_dpkg_lock() {
     LOCKFILE="/var/lib/dpkg/lock-frontend"
-    echo -n "Waiting for dpkg lock ($LOCKFILE) and unattended-upgrades to finish"
+    echo "Verifying that unattended-upgrades and dpkg locks are cleared before proceeding..."
 
-    TIMEOUT=300  # seconds
-    INTERVAL=1
+    TIMEOUT=300  # Maximum wait time in seconds
+    INTERVAL=1   # Poll interval
     ELAPSED=0
+
+    # Initial status check before waiting
+    UPGRADE_PROC=$(pgrep -f unattended-upgrade)
+    SHUTDOWN_PROC=$(pgrep -f unattended-upgrade-shutdown)
+    LOCK_HELD=$(sudo fuser "$LOCKFILE" 2>/dev/null)
+
+    echo -e "  - unattended-upgrade process: ${YELLOW}${UPGRADE_PROC:-none}${NC}"
+    echo -e "  - unattended-upgrade-shutdown process: ${YELLOW}${SHUTDOWN_PROC:-none}${NC}"
+    echo -e "  - dpkg lock held by: ${YELLOW}${LOCK_HELD:-none}${NC}"
+
+    if [ -n "$SHUTDOWN_PROC" ]; then
+        START_TIME=$(ps -o lstart= -p "$SHUTDOWN_PROC" | xargs -I{} date -d "{}" +%s)
+        NOW=$(date +%s)
+        AGE=$((NOW - START_TIME))
+        echo -e "  - unattended-upgrade-shutdown process age: ${YELLOW}${AGE}s${NC}"
+    fi
+
+    echo -n "Waiting for dpkg lock ($LOCKFILE) and unattended-upgrades to finish"
 
     while true; do
         UPGRADE_PROC=$(pgrep -f unattended-upgrade)
         SHUTDOWN_PROC=$(pgrep -f unattended-upgrade-shutdown)
         LOCK_HELD=$(sudo fuser "$LOCKFILE" 2>/dev/null)
+
+        if [ -z "$UPGRADE_PROC" ] && [ -n "$SHUTDOWN_PROC" ]; then
+            START_TIME=$(ps -o lstart= -p "$SHUTDOWN_PROC" | xargs -I{} date -d "{}" +%s)
+            NOW=$(date +%s)
+            AGE=$((NOW - START_TIME))
+
+            if [ "$AGE" -ge 300 ]; then
+                echo -e "\nWARNING: Detected lingering unattended-upgrade-shutdown process (PID $SHUTDOWN_PROC), running for ${AGE}s"
+                echo -e "         Proceeding anyway, as the main upgrade process has already finished and the dpkg lock appears clear."
+                break
+            fi
+        fi
 
         if [ -z "$UPGRADE_PROC" ] && [ -z "$SHUTDOWN_PROC" ] && [ -z "$LOCK_HELD" ]; then
             echo -e " done."
@@ -116,6 +146,7 @@ check_dpkg_lock() {
 }
 
 
+
 cd /tmp || { echo -e "${RED}FATAL ERROR${NC}. Failed to change directory to /tmp"; exit 1; }
 # --------------------------------------------------
 # Warm up Ubuntu by waiting for unattended upgrades and dpkg locks to finish
@@ -123,30 +154,7 @@ cd /tmp || { echo -e "${RED}FATAL ERROR${NC}. Failed to change directory to /tmp
 echo -e "${GREEN}---- Preparing the system: waiting for automatic updates to complete...${NC}"
 
 # Wait for unattended-upgrades process to finish
-echo -n "Waiting for unattended-upgrades to finish "
-
-TIMEOUT=120  # seconds
-INTERVAL=2
-ELAPSED=0
-
-while pgrep -f unattended-upgrade > /dev/null || pgrep -f unattended-upgrade-shutdown > /dev/null; do
-    if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
-        echo -e "\n${RED}ERROR:${NC} Timeout waiting for unattended-upgrades to finish (waited ${TIMEOUT}s)"
-        echo -e "       Please check if the process is stuck:"
-        echo -e "         ${YELLOW}ps aux | grep unattended-upgrade${NC}"
-        echo -e "         ${YELLOW}sudo journalctl -f -u unattended-upgrades.service${NC}"
-        echo -e "       If necessary, you may stop it manually:"
-        echo -e "         ${YELLOW}sudo killall unattended-upgrade unattended-upgrade-shutdown${NC}"
-        exit 1
-    fi
-
-    sleep "$INTERVAL"
-    echo -n "."
-    ELAPSED=$((ELAPSED + INTERVAL))
-done
-
-echo -e " done."
-
+echo -n "     Verifying that unattended-upgrades are finished"
 
 # Wait for dpkg frontend lock to be released
 check_dpkg_lock
