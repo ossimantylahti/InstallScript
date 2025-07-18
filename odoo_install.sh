@@ -74,6 +74,48 @@ GREEN='\033[1;32m'
 RED='\033[1;31m'
 BLUE='\033[1;34m'
 NC='\033[0m' # No Color
+
+#--------------------------------------------------
+# Check function for package manager locks
+#--------------------------------------------------
+check_dpkg_lock() {
+    LOCKFILE="/var/lib/dpkg/lock-frontend"
+    echo -n "Waiting for dpkg lock ($LOCKFILE) and unattended-upgrades to finish"
+
+    TIMEOUT=300  # seconds
+    INTERVAL=1
+    ELAPSED=0
+
+    while true; do
+        UPGRADE_PROC=$(pgrep -f unattended-upgrade)
+        SHUTDOWN_PROC=$(pgrep -f unattended-upgrade-shutdown)
+        LOCK_HELD=$(sudo fuser "$LOCKFILE" 2>/dev/null)
+
+        if [ -z "$UPGRADE_PROC" ] && [ -z "$SHUTDOWN_PROC" ] && [ -z "$LOCK_HELD" ]; then
+            echo -e " done."
+            echo -e "     ${GREEN}OK.${NC} No blocking unattended-upgrade package operations detected. Proceeding with installation."
+            return
+        fi
+
+        if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+            echo -e "\n${RED}FATAL ERROR:${NC} Timeout waiting for dpkg lock or unattended-upgrades to finish (waited ${TIMEOUT}s)"
+            echo -e "       Please investigate running package operations before retrying."
+            echo -e "       Monitor with:"
+            echo -e "         ${YELLOW}ps aux | grep unattended-upgrade${NC}"
+            echo -e "         ${YELLOW}sudo lsof $LOCKFILE${NC}"
+            echo -e "         ${YELLOW}sudo unattended-upgrade --debug${NC}"
+            echo -e "       If stuck, you may forcefully stop with:"
+            echo -e "         ${YELLOW}sudo killall unattended-upgrade unattended-upgrade-shutdown${NC}"
+            exit 1
+        fi
+
+        sleep "$INTERVAL"
+        echo -n "."
+        ELAPSED=$((ELAPSED + INTERVAL))
+    done
+}
+
+
 cd /tmp || { echo -e "${RED}FATAL ERROR${NC}. Failed to change directory to /tmp"; exit 1; }
 # --------------------------------------------------
 # Warm up Ubuntu by waiting for unattended upgrades and dpkg locks to finish
@@ -82,57 +124,37 @@ echo -e "${GREEN}---- Preparing the system: waiting for automatic updates to com
 
 # Wait for unattended-upgrades process to finish
 echo -n "Waiting for unattended-upgrades to finish "
+
+TIMEOUT=120  # seconds
+INTERVAL=2
+ELAPSED=0
+
 while pgrep -f unattended-upgrade > /dev/null || pgrep -f unattended-upgrade-shutdown > /dev/null; do
-    sleep 5
+    if [ "$ELAPSED" -ge "$TIMEOUT" ]; then
+        echo -e "\n${RED}ERROR:${NC} Timeout waiting for unattended-upgrades to finish (waited ${TIMEOUT}s)"
+        echo -e "       Please check if the process is stuck:"
+        echo -e "         ${YELLOW}ps aux | grep unattended-upgrade${NC}"
+        echo -e "         ${YELLOW}sudo journalctl -f -u unattended-upgrades.service${NC}"
+        echo -e "       If necessary, you may stop it manually:"
+        echo -e "         ${YELLOW}sudo killall unattended-upgrade unattended-upgrade-shutdown${NC}"
+        exit 1
+    fi
+
+    sleep "$INTERVAL"
     echo -n "."
+    ELAPSED=$((ELAPSED + INTERVAL))
 done
+
 echo -e " done."
+
 
 # Wait for dpkg frontend lock to be released
-LOCKFILE="/var/lib/dpkg/lock-frontend"
-echo -n "Waiting for dpkg lock ($LOCKFILE) to be released "
-while sudo fuser $LOCKFILE &>/dev/null; do
-    sleep 2
-    echo -n "."
-done
-echo -e " done."
+check_dpkg_lock
 
-# Optional: run apt update to refresh the package list after upgrades
+# Run apt update to refresh the package list after upgrades
 echo -e "Refreshing package index after unattended upgrades..."
 sudo apt-get update -y 1>/dev/null
 echo -e "     ${GREEN}OK.${NC} Package index updated. Proceeding with the installation."
-
-# --------------------------------------------------
-# Check if unattended-upgrades or apt locks are active
-# --------------------------------------------------
-echo -e "${GREEN}---- Checking for unattended-upgrades and dpkg locks...${NC}"
-
-UPGRADE_PROC=$(pgrep -f unattended-upgrade)
-SHUTDOWN_PROC=$(pgrep -f unattended-upgrade-shutdown)
-LOCKFILE="/var/lib/dpkg/lock-frontend"
-
-if [ -n "$UPGRADE_PROC" ] || [ -n "$SHUTDOWN_PROC" ]; then
-  echo -e "${RED}ERROR:${NC} Detected running unattended-upgrades process."
-  echo -e "       This will interfere with apt/dpkg operations."
-  echo -e "       Please wait for it to finish, or run the following commands to monitor progress:"
-  echo -e "         ${YELLOW}sudo journalctl -f -u unattended-upgrades.service${NC}"
-  echo -e "         ${YELLOW}ps aux | grep unattended-upgrade${NC}"
-  echo -e "       If you're sure it's stuck, you can stop it with:"
-  echo -e "         ${YELLOW}sudo killall unattended-upgrade unattended-upgrade-shutdown${NC}"
-  echo -e "       Then re-run this installation script."
-  exit 1
-fi
-
-if sudo fuser "$LOCKFILE" &>/dev/null; then
-  echo -e "${RED}ERROR:${NC} dpkg lockfile is currently in use: $LOCKFILE"
-  echo -e "       Please wait for other package operations to finish."
-  echo -e "       Monitor using:"
-  echo -e "         ${YELLOW}sudo lsof $LOCKFILE${NC}"
-  exit 1
-fi
-
-echo -e "     ${GREEN}OK.${NC} No blocking unattended-upgrade package operations detected. Proceeding with installation."
-
 
 # Enable logging
 LOGFILE="odoo-install.log"
@@ -260,7 +282,7 @@ fi
 
 
 #--------------------------------------------------
-# Install Dependencies
+# Install timezone management packages
 #--------------------------------------------------
 echo "---- Ensuring server timezone data is up-to-date"
 sudo apt-get install -y locales libc6 tzdata util-linux 1>/dev/null
@@ -291,6 +313,9 @@ echo -e "     ${GREEN}OK.${NC} Log directory created at ${BLUE}/var/log/$OE_USER
 #--------------------------------------------------
 
 echo -e "\n---- Installing PostgreSQL Server"
+# Wait for dpkg frontend lock to be released
+check_dpkg_lock
+
 if [ $INSTALL_POSTGRESQL_FOURTEEN = "True" ]; then
     echo -e "     ${YELLOW}NOTE${NC} Proceeding with postgreSQL V14 due to the user's choise"
     sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc|sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
