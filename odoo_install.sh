@@ -75,6 +75,64 @@ RED='\033[1;31m'
 BLUE='\033[1;34m'
 NC='\033[0m' # No Color
 cd /tmp || { echo -e "${RED}FATAL ERROR${NC}. Failed to change directory to /tmp"; exit 1; }
+# --------------------------------------------------
+# Warm up Ubuntu by waiting for unattended upgrades and dpkg locks to finish
+# --------------------------------------------------
+echo -e "${GREEN}---- Preparing the system: waiting for automatic updates to complete...${NC}"
+
+# Wait for unattended-upgrades process to finish
+echo -n "Waiting for unattended-upgrades to finish "
+while pgrep -f unattended-upgrade > /dev/null || pgrep -f unattended-upgrade-shutdown > /dev/null; do
+    sleep 5
+    echo -n "."
+done
+echo -e " done."
+
+# Wait for dpkg frontend lock to be released
+LOCKFILE="/var/lib/dpkg/lock-frontend"
+echo -n "Waiting for dpkg lock ($LOCKFILE) to be released "
+while sudo fuser $LOCKFILE &>/dev/null; do
+    sleep 2
+    echo -n "."
+done
+echo -e " done."
+
+# Optional: run apt update to refresh the package list after upgrades
+echo -e "Refreshing package index after unattended upgrades..."
+sudo apt-get update -y 1>/dev/null
+echo -e "     ${GREEN}OK.${NC} Package index updated. Proceeding with the installation."
+
+# --------------------------------------------------
+# Check if unattended-upgrades or apt locks are active
+# --------------------------------------------------
+echo -e "${GREEN}---- Checking for unattended-upgrades and dpkg locks...${NC}"
+
+UPGRADE_PROC=$(pgrep -f unattended-upgrade)
+SHUTDOWN_PROC=$(pgrep -f unattended-upgrade-shutdown)
+LOCKFILE="/var/lib/dpkg/lock-frontend"
+
+if [ -n "$UPGRADE_PROC" ] || [ -n "$SHUTDOWN_PROC" ]; then
+  echo -e "${RED}ERROR:${NC} Detected running unattended-upgrades process."
+  echo -e "       This will interfere with apt/dpkg operations."
+  echo -e "       Please wait for it to finish, or run the following commands to monitor progress:"
+  echo -e "         ${YELLOW}sudo journalctl -f -u unattended-upgrades.service${NC}"
+  echo -e "         ${YELLOW}ps aux | grep unattended-upgrade${NC}"
+  echo -e "       If you're sure it's stuck, you can stop it with:"
+  echo -e "         ${YELLOW}sudo killall unattended-upgrade unattended-upgrade-shutdown${NC}"
+  echo -e "       Then re-run this installation script."
+  exit 1
+fi
+
+if sudo fuser "$LOCKFILE" &>/dev/null; then
+  echo -e "${RED}ERROR:${NC} dpkg lockfile is currently in use: $LOCKFILE"
+  echo -e "       Please wait for other package operations to finish."
+  echo -e "       Monitor using:"
+  echo -e "         ${YELLOW}sudo lsof $LOCKFILE${NC}"
+  exit 1
+fi
+
+echo -e "     ${GREEN}OK.${NC} No blocking unattended-upgrade package operations detected. Proceeding with installation."
+
 
 # Enable logging
 LOGFILE="odoo-install.log"
@@ -243,9 +301,17 @@ else
     echo -e "     ${YELLOW}NOTE${NC} Proceeding with the default postgreSQL version based on Linux version"
     sudo apt-get install -y postgresql postgresql-server-dev-all 1>/dev/null
 fi
+
+
+if ! command -v psql &> /dev/null; then
+  echo -e "${RED}FATAL ERROR${NC} PostgreSQL installation failed. psql command not found. Aborting installation."
+  exit 1
+fi
+
 echo -e "     ${GREEN}OK.${NC} PostgreSQL server installed successfully."
 POSTGRES_VERSION=$(psql --version | awk '{print $3}')
 echo -e "     ${YELLOW}NOTE${NC} PostgreSQL version:${BLUE} $POSTGRES_VERSION${NC}"
+
 
 echo -e "\n---- Creating Odoo PostgreSQL User "
 sudo su - postgres -c "cd /tmp && createuser -s $OE_USER" 2> /dev/null || true
@@ -258,6 +324,10 @@ sudo -u postgres psql -c "DO \$\$ BEGIN
 sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname = 'odoo'" | grep -q 1 || \
 sudo -u postgres createdb -O ${OE_USER} odoo
 
+if ! id "postgres" &>/dev/null; then
+  echo -e "${RED}FATAL ERROR${NC} PostgreSQL user 'postgres' not found. Check PostgreSQL installation. Aborting instsallation."
+  exit 1
+fi
 
 echo -e "     ${GREEN}OK.${NC} Odoo postgresql user created."
 echo -e "     ${YELLOW}NOTE${NC} PostgreSQL user:${BLUE} $OE_USER${NC}"
