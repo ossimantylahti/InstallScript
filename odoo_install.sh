@@ -86,9 +86,9 @@ check_dpkg_lock() {
     INTERVAL=1   # Poll interval
     ELAPSED=0
 
-    # Initial status check before waiting
-    UPGRADE_PROC=$(pgrep -f unattended-upgrade)
-    SHUTDOWN_PROC=$(pgrep -f unattended-upgrade-shutdown)
+    # Precise process detection using ps instead of pgrep
+    UPGRADE_PROC=$(ps -eo pid,comm,args | grep '[u]nattended-upgrade' | grep -v unattended-upgrade-shutdown | awk '{print $1}' || true)
+    SHUTDOWN_PROC=$(ps -eo pid,comm,args | grep '[u]nattended-upgrade-shutdown' | awk '{print $1}' || true)
     LOCK_HELD=$(sudo fuser "$LOCKFILE" 2>/dev/null)
 
     echo -e "  - unattended-upgrade process: ${YELLOW}${UPGRADE_PROC:-none}${NC}"
@@ -105,10 +105,12 @@ check_dpkg_lock() {
     echo -n "Waiting for dpkg lock ($LOCKFILE) and unattended-upgrades to finish"
 
     while true; do
-        UPGRADE_PROC=$(pgrep -f unattended-upgrade)
-        SHUTDOWN_PROC=$(pgrep -f unattended-upgrade-shutdown)
+        # Recheck each loop
+        UPGRADE_PROC=$(ps -eo pid,comm,args | grep '[u]nattended-upgrade' | grep -v unattended-upgrade-shutdown | awk '{print $1}' || true)
+        SHUTDOWN_PROC=$(ps -eo pid,comm,args | grep '[u]nattended-upgrade-shutdown' | awk '{print $1}' || true)
         LOCK_HELD=$(sudo fuser "$LOCKFILE" 2>/dev/null)
 
+        # If only shutdown is present, check its age
         if [ -z "$UPGRADE_PROC" ] && [ -n "$SHUTDOWN_PROC" ]; then
             START_TIME=$(ps -o lstart= -p "$SHUTDOWN_PROC" | xargs -I{} date -d "{}" +%s)
             NOW=$(date +%s)
@@ -121,6 +123,7 @@ check_dpkg_lock() {
             fi
         fi
 
+        # Exit if everything is clear
         if [ -z "$UPGRADE_PROC" ] && [ -z "$SHUTDOWN_PROC" ] && [ -z "$LOCK_HELD" ]; then
             echo -e " done."
             echo -e "     ${GREEN}OK.${NC} No blocking unattended-upgrade package operations detected. Proceeding with installation."
@@ -144,7 +147,6 @@ check_dpkg_lock() {
         ELAPSED=$((ELAPSED + INTERVAL))
     done
 }
-
 
 
 cd /tmp || { echo -e "${RED}FATAL ERROR${NC}. Failed to change directory to /tmp"; exit 1; }
@@ -851,12 +853,19 @@ fi
 
 echo -e "\n---- Testing HTTP on longpolling port ${LONGPOLLING_PORT}"
 
-if curl -s --max-time 2 http://localhost:${LONGPOLLING_PORT} > /dev/null; then
-    echo -e "     ${GREEN}OK.${NC} Longpolling or gevent port ${LONGPOLLING_PORT} is responding."
+# Check if longpolling_port is defined in the config
+if grep -q -E "^\s*longpolling_port\s*=\s*${LONGPOLLING_PORT}\b" "$ODOO_CONF"; then
+    if curl -s --max-time 2 http://localhost:${LONGPOLLING_PORT} > /dev/null; then
+        echo -e "     ${GREEN}OK.${NC} Longpolling or gevent port ${LONGPOLLING_PORT} is responding."
+    else
+        echo -e "     ${RED}ERROR.${NC} Longpolling gevent port ${LONGPOLLING_PORT} is not responding."
+        echo -e "     Checking active listeners for diagnostic purposes:"
+        sudo ss -ltnp | grep ":${LONGPOLLING_PORT}" || echo "     No process is currently listening on port ${LONGPOLLING_PORT}"
+    fi
 else
-    echo -e "     ${RED}ERROR.${NC} Longpolling gevent port ${LONGPOLLING_PORT} is not respond."
-    sudo ss -ltnp | grep ":${LONGPOLLING_PORT}" 
+    echo -e "     ${YELLOW}NOTICE.${NC} Longpolling port ${LONGPOLLING_PORT} not configured in ${ODOO_CONF}. Skipping test."
 fi
+
 
 
 if pgrep -f odoo-bin >/dev/null; then
