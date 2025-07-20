@@ -19,13 +19,13 @@
 #--------------------------------------------------
 
 # Set the odoo server website name
-WEBSITE_NAME="_"
+WEBSITE_NAME="ubuntu3.odooserver.fi"                #FIXME REMEMBER TO CHANGE THIS BACK TO _ BEFORE PUBLIC RELEASE
 # Set to true to install and configure nginx, "False" to skip nginx installation
 INSTALL_NGINX="True"
 # Set to "True" to install certbot and have ssl enabled, "False" to use http
 ENABLE_SSL="True"
 # Provide Email to register ssl certificate from Certbot
-ADMIN_EMAIL="odoo@example.com"
+ADMIN_EMAIL="odoo@example2.com"                     #FIXME REMEMBER TO CHANGE THIS BACK TO odoo@example.com BEFORE PUBLIC RELEASE
 # USE_LETSENCRYPT_STAGING will choose wether to use Let's Encrypt staging test server to avoid hitting rate limits.
 # Change to "False" when deploying to a live sever. Keep the value as "True" for testing purposes.
 USE_LETSENCRYPT_STAGING="True"
@@ -41,8 +41,10 @@ USE_PYTHON_VENV="True"
 INSTALL_WKHTMLTOPDF="True"
 # Set this to True if you want to install the Odoo enterprise version!
 IS_ENTERPRISE="False"
-# Installs postgreSQL V14 instead of defaults (e.g V12 for Ubuntu 20/22) - this improves performance
-INSTALL_POSTGRESQL_FOURTEEN="True"
+# Odoo SA recommends a certain version of PostgreSQL for each Odoo version. Using this variable will install the Odoo SA recommended version
+# and will bypass the default PostgreSQL version that comes with Ubuntu distribution.
+# Please note that in some older Odoo versions the recommended PostgreSQL version may not be available in the generic Ubuntu repositories.
+USE_ODOO_RECOMMENDED_POSTGRESQL_VERSION="True"
 #Create odoo database with this name during installation. Leave empty to not to create a database.
 OE_SUPERADMIN="admin"
 # Set to "True" to generate a random password, "False" to use the variable in OE_SUPERADMIN
@@ -93,7 +95,7 @@ pretty_colours() {
 #--------------------------------------------------
 check_dpkg_lock() {
     LOCKFILE="/var/lib/dpkg/lock-frontend"
-    echo "Verifying that unattended-upgrades and dpkg locks are cleared before proceeding..."
+    echo -e "     Verifying that unattended-upgrades and dpkg locks are cleared before proceeding..."
 
     TIMEOUT=300  # Maximum wait time in seconds
     INTERVAL=1   # Poll interval
@@ -104,9 +106,9 @@ check_dpkg_lock() {
     SHUTDOWN_PROC=$(ps -eo pid,comm,args | grep '[u]nattended-upgrade-shutdown' | awk '{print $1}' || true)
     LOCK_HELD=$(sudo fuser "$LOCKFILE" 2>/dev/null)
 
-    echo -e "  - unattended-upgrade process: ${YELLOW}${UPGRADE_PROC:-none}${NC}"
-    echo -e "  - unattended-upgrade-shutdown process: ${YELLOW}${SHUTDOWN_PROC:-none}${NC}"
-    echo -e "  - dpkg lock held by: ${YELLOW}${LOCK_HELD:-none}${NC}"
+    echo -e "     - unattended-upgrade process: ${YELLOW}${UPGRADE_PROC:-none}${NC}"
+    echo -e "     - unattended-upgrade-shutdown process: ${YELLOW}${SHUTDOWN_PROC:-none}${NC}"
+    echo -e "     - dpkg lock held by: ${YELLOW}${LOCK_HELD:-none}${NC}"
 
     if [ -n "$SHUTDOWN_PROC" ]; then
         START_TIME=$(ps -o lstart= -p "$SHUTDOWN_PROC" | xargs -I{} date -d "{}" +%s)
@@ -115,7 +117,7 @@ check_dpkg_lock() {
         echo -e "  - unattended-upgrade-shutdown process age: ${YELLOW}${AGE}s${NC}"
     fi
 
-    echo -n "Waiting for dpkg lock ($LOCKFILE) and unattended-upgrades to finish"
+    echo -n "     Waiting for dpkg lock ($LOCKFILE) and unattended-upgrades to finish"
 
     while true; do
         # Recheck each loop
@@ -130,7 +132,7 @@ check_dpkg_lock() {
             AGE=$((NOW - START_TIME))
 
             if [ "$AGE" -ge 300 ]; then
-                echo -e "\nWARNING: Detected lingering unattended-upgrade-shutdown process (PID $SHUTDOWN_PROC), running for ${AGE}s"
+                echo -e "\n${YELLOW}WARNING${NC}: Detected lingering unattended-upgrade-shutdown process (PID ${YELLOW}$SHUTDOWN_PROC${NC}), running for ${YELLOW}${AGE}${NC}s${NC}"
                 echo -e "         Proceeding anyway, as the main upgrade process has already finished and the dpkg lock appears clear."
                 break
             fi
@@ -354,22 +356,71 @@ check_dpkg_lock
 #--------------------------------------------------
 # Install PostgreSQL Server
 #--------------------------------------------------
+#
+# Odoo S.A. recommended PostgreSQL versions:
+# - Odoo 16.0 → PostgreSQL 14
+# - Odoo 17.0 → PostgreSQL 15
+# - Odoo 18.0 → PostgreSQL 16
+#
+# For compatibility and long-term support, it is advised to follow these recommendations
+# unless you have a specific reason to override the database version.
+
 echo -e "\n---- Installing PostgreSQL Server"
 
-if [ "$INSTALL_POSTGRESQL_FOURTEEN" = "True" ]; then
-    echo -e "     ${YELLOW}NOTE${NC} Proceeding with PostgreSQL V14 due to the user's choice"
+
+if [ "$USE_ODOO_RECOMMENDED_POSTGRESQL_VERSION" = "True" ]; then
+    echo -e "     ${YELLOW}NOTE${NC} Proceeding with Odoo-recommended PostgreSQL version for Odoo ${OE_VERSION}"
+
+    # Determine PostgreSQL version based on Odoo version
+    if [[ "$OE_VERSION" == "13.0" ]]; then
+        PG_VERSION="11"
+    elif [[ "$OE_VERSION" == "14.0" ]]; then
+        PG_VERSION="12"
+    elif [[ "$OE_VERSION" == "15.0" ]]; then
+        PG_VERSION="13"
+    elif [[ "$OE_VERSION" == "16.0" ]]; then
+        PG_VERSION="14"
+    elif [[ "$OE_VERSION" == "17.0" ]]; then
+        PG_VERSION="15"
+    elif [[ "$OE_VERSION" == "18.0" ]]; then
+        PG_VERSION="16"
+    elif [[ "$OE_VERSION" == "19.0" ]]; then    # NOTE: Preliminary support for Odoo 19.0
+        PG_VERSION="16"
+    else
+        echo -e "${RED}ERROR${NC} Unsupported or unknown Odoo version: ${OE_VERSION}. Cannot determine PostgreSQL version."
+        exit 1
+    fi
+
+    # Add PostgreSQL apt repository
     sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/postgresql.gpg
-    sudo sh -c "echo 'deb http://apt.postgresql.org/pub/repos/apt \$(lsb_release -cs)-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
+    CODENAME=$(lsb_release -cs)
+    echo "deb http://apt.postgresql.org/pub/repos/apt ${CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
     sudo apt-get update 1>/dev/null
-    sudo apt-get install -y postgresql-14 1>/dev/null
+
+    # Check availability of selected PostgreSQL version in apt
+    if ! apt-cache show "postgresql-${PG_VERSION}" > /dev/null 2>&1; then
+        echo -e "${RED}FATAL ERROR${NC} PostgreSQL ${PG_VERSION} is not available in pgdg for Ubuntu ${CODENAME}. Aborting installation."
+        exit 1
+    fi
+
+    # Install Odoo SA recommended PostgreSQL version
+    echo -e "     ${YELLOW}Installing PostgreSQL ${PG_VERSION}${NC} for Odoo ${OE_VERSION}"
+    sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-server-dev-${PG_VERSION}" 1>/dev/null
 else
-    echo -e "     ${YELLOW}NOTE${NC} Proceeding with the default PostgreSQL version based on Linux version"
+    echo -e "     ${YELLOW}NOTE${NC} Proceeding with the default PostgreSQL version based on Ubuntu repositories"
     sudo apt-get install -y postgresql postgresql-server-dev-all 1>/dev/null
 fi
 
+# Final check that PostgreSQL was installed
 if ! command -v psql &> /dev/null; then
-  echo -e "${RED}FATAL ERROR${NC} PostgreSQL installation failed. 'psql' command not found. Aborting installation."
-  exit 1
+    echo -e "${RED}FATAL ERROR${NC} PostgreSQL installation failed. 'psql' command not found. Aborting installation."
+    exit 1
+fi
+
+# Check if psql is now available
+if ! command -v psql &> /dev/null; then
+    echo -e "${RED}FATAL ERROR${NC} PostgreSQL installation failed. 'psql' command not found. Aborting installation."
+    exit 1
 fi
 
 echo -e "     ${GREEN}OK${NC}. PostgreSQL server installed successfully."
@@ -1018,7 +1069,7 @@ echo -e "${YELLOW} Longpolling port:       ${NC}$LONGPOLLING_PORT"
 echo -e "${YELLOW} Configuration file:     ${NC}/etc/${OE_CONFIG}.conf"
 echo -e "${YELLOW} Log file:               ${NC}/var/log/$OE_USER/odoo-server.log"
 echo -e "${YELLOW} Addons folder:          ${NC}/odoo/custom/addons/"
-echo -e "${YELLOW} Superadmin password:    ${NC}$OE_SUPERADMIN"
+echo -e "${YELLOW} Master password:        ${NC}$OE_SUPERADMIN"
 echo -e "${YELLOW} Codebase location:      ${NC}/odoo/odoo-server"
 echo -e "${YELLOW} Python virtualenv:      ${NC}/odoo/venv"
 echo -e "${YELLOW} Full installation log:  ${NC}$FULL_LOGFILE_PATH"
