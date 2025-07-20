@@ -31,7 +31,7 @@ ADMIN_EMAIL="odoo@example2.com"                     #FIXME REMEMBER TO CHANGE TH
 USE_LETSENCRYPT_STAGING="True"
 # Choose the Odoo version which you want to install. For example: 16.0, 17.0, 18.0 or saas-22.
 # This corresponds to the branch name in the Odoo GitHub repository.
-OE_VERSION="16.0"
+OE_VERSION="17.0"
 
 # Select to use Python virtual environment or not. For moden Ubuntus 22.0 and later, this is mandatory.
 # Note: for Python Pip installations the script is calling pip as pip3.
@@ -79,8 +79,7 @@ pretty_colours() {
     # Function to set up pretty colors for terminal output
     # This function is called at the beginning of the script to set up color variables
     # so that they can be used throughout the script for better readability.
-    # ANSI escape codes are used to define colors.
-    echo -e "\nSetting up pretty colors for terminal output..."
+    # ANSI escape codes are used to define colors.    
     # Set ANSI colors
     YELLOW='\033[1;33m'
     GREEN='\033[1;32m'
@@ -183,7 +182,9 @@ FULL_LOGFILE_PATH=$(readlink -f "$LOGFILE")
 # Without this check, the script may fail if dpkg is locked by an unattended upgrade process.
 # (Looking at you, Postgres)
 # --------------------------------------------------
-echo -e "${GREEN}---- Preparing the system: waiting for automatic updates to complete...${NC}"
+echo -e "${GREEN}==== ${NC} Odoo installation script started."
+echo -e ""
+echo -e "---- Preparing the system: waiting for automatic updates to complete...${NC}"
 
 # Wait for unattended-upgrades process to finish
 echo -n "     Verifying that unattended-upgrades are finished"
@@ -529,7 +530,32 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   ${OE_VENV}/bin/pip install --quiet --upgrade pip setuptools cython
   ${OE_VENV}/bin/pip install --quiet wheel
   ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
-  ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
+  # Install gevent and greenlet for Odoo workers mode. no-build-isolation is needed to avoid issues with cython compilation
+  # Installing gevent, greenlet and zope.event (with build isolation disabled for gevent)
+  ${OE_VENV}/bin/pip install --quiet --no-build-isolation gevent greenlet zope.event
+
+  # Verifying gevent installation
+  if ! ${OE_VENV}/bin/python3 -c "import gevent" &>/dev/null; then
+    echo -e "     ${YELLOW}WARNING${NC}: gevent not found after initial install, retrying..."
+    ${OE_VENV}/bin/pip install --quiet --no-build-isolation gevent
+    if ${OE_VENV}/bin/python3 -c "import gevent" &>/dev/null; then
+      echo -e "     ${GREEN}OK${NC}. gevent installed manually."
+    else
+      echo -e "     ${RED}ERROR${NC}: gevent installation failed even after retry."
+    fi
+  else
+    echo -e "     ${GREEN}OK${NC}. gevent confirmed."
+  fi
+
+  # Verifying psycopg2
+  if ! ${OE_VENV}/bin/python3 -c "import psycopg2" &>/dev/null; then
+    echo -e "     ${YELLOW}WARNING${NC}: psycopg2 missing, installing manually..."
+    ${OE_VENV}/bin/pip install --quiet psycopg2
+    echo -e "     ${GREEN}OK${NC}. psycopg2 installed manually."
+  else
+    echo -e "     ${GREEN}OK${NC}. psycopg2 already installed."
+  fi
+
   ${OE_VENV}/bin/python3 -c "import zope.event; print('     \033[0;32mOK\033[0m. zope.event confirmed')"
 
   echo -e "\n     ${YELLOW}NOTE${NC} Installed versions:"
@@ -550,7 +576,15 @@ else
   sudo -H pip3 install --quiet wheel
   sudo -H pip3 install --quiet --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
   sudo -H pip3 install --quiet gevent greenlet zope.event
-  echo -e "     ${GREEN}OK${NC}. pip requirements installed globally."
+
+  # Verifying psycopg2. (Sometimes psycopg2 is not installed by default in Ubuntu 22.04 and later with Odoo's requirements.txt)
+  if ! python3 -c "import psycopg2" &>/dev/null; then
+    echo -e "     ${YELLOW}NOTICE${NC}: psycopg2 missing, installing manually..."
+    sudo -H pip3 install --quiet psycopg2
+    echo -e "     ${GREEN}OK${NC}. psycopg2 installed manually."
+  else
+    echo -e "     ${GREEN}OK${NC}. psycopg2 already installed."
+  fi
 
   echo -e "\n     ${YELLOW}NOTE${NC} Installed versions:"
   echo -e "     ${BLUE}Python${NC}    version: ${YELLOW}$(python3 --version)${NC}"
@@ -564,6 +598,7 @@ else
     echo -e "     ${YELLOW}WARNING:${NC} gevent not found. Odoo uses werkzeug and does not support workers or longpolling."
   fi
 fi
+
 
 
 echo -e "\n---- Installing ${BLUE}NodeJS, NPM${NC} and ${BLUE}rtlcss${NC} for RTL stylesheet support"
