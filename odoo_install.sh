@@ -452,19 +452,44 @@ echo -e "     ${GREEN}OK${NC}. PostgreSQL setup complete. Role: ${BLUE}$OE_USER$
 
 
 #--------------------------------------------------
-# Install Python
+# Verify and install correct Python version
 #--------------------------------------------------
 
-echo -e "\n--- Installing Python"
-
-# Verify and install Python versions
 install_python() {
   local v=$1
+  local ubuntu=$(lsb_release -rs)
+  local deadsnakes_needed="false"
+
+  echo -e "     ${YELLOW}NOTE${NC} Installing Python ${v} for Ubuntu ${ubuntu}"
+
   if ! command -v python${v} &>/dev/null; then
-  #Deadsnakes repository is needed for older Python versions. And older Odoo requires those.
-    sudo add-apt-repository -y ppa:deadsnakes/ppa  1>/dev/null 
-    sudo apt-get update 1>/dev/null
+    # Determine if we need to use deadsnakes repository
+    if [[ "$ubuntu" == "22.04" && "$v" =~ ^(3.6|3.8|3.9)$ ]]; then
+      deadsnakes_needed="true"
+    elif [[ "$ubuntu" == "24.04" && "$v" =~ ^(3.6|3.8|3.9|3.10)$ ]]; then
+      deadsnakes_needed="true"
+    elif [[ "$ubuntu" == "22.04" && "$v" == "3.10" ]]; then
+      # 3.10 is default in Ubuntu 22.04 — no need for deadsnakes
+      deadsnakes_needed="false"
+    elif [[ "$ubuntu" == "24.04" && "$v" == "3.12" ]]; then
+      # 3.12 is default in Ubuntu 24.04
+      deadsnakes_needed="false"
+    else
+      echo -e "${RED}FATAL ERROR:${NC} Python ${v} is not available on Ubuntu ${ubuntu}, and no install rule is defined."
+      exit 1
+    fi
+
+    if [[ "$deadsnakes_needed" == "true" ]]; then
+      echo -e "     ${YELLOW}Adding deadsnakes repository for legacy Python version${NC}"
+      sudo add-apt-repository -y ppa:deadsnakes/ppa 1>/dev/null 
+      sudo apt-get update 1>/dev/null
+    fi
+
     sudo apt-get install -y python${v} python${v}-venv python${v}-dev 1>/dev/null
+    if ! command -v python${v} &>/dev/null; then
+      echo -e "${RED}FATAL ERROR:${NC} Python ${v} installation failed."
+      exit 1
+    fi
   fi
 }
 
@@ -480,10 +505,11 @@ case "$OE_VERSION" in
   "19.0")
     PYTHON_VER="3.11";; #Preliminary support for Odoo 19.0
   *)
-    echo "Unsupported Odoo version: $OE_VERSION"; exit 1;;
+    echo -e "${RED}ERROR${NC} Unsupported Odoo version: $OE_VERSION"; exit 1;;
 esac
 
 install_python "${PYTHON_VER}"
+
 
 for pkg in gcc libpq-dev libsasl2-dev libldap2-dev libssl-dev; do
     dpkg -s $pkg &> /dev/null || { echo "Missing system packet: $pkg"; exit 1; }
