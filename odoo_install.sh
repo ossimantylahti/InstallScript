@@ -114,7 +114,7 @@ check_dpkg_lock() {
         START_TIME=$(ps -o lstart= -p "$SHUTDOWN_PROC" | xargs -I{} date -d "{}" +%s)
         NOW=$(date +%s)
         AGE=$((NOW - START_TIME))
-        echo -e "  - unattended-upgrade-shutdown process age: ${YELLOW}${AGE}s${NC}"
+        echo -e "     - unattended-upgrade-shutdown process age: ${YELLOW}${AGE}s${NC}"
     fi
 
     echo -n "     Waiting for dpkg lock ($LOCKFILE) and unattended-upgrades to finish"
@@ -198,7 +198,7 @@ echo -e "     ${GREEN}OK${NC}. Package index updated. Proceeding with the instal
 
 
 echo -e "${NC}Starting Odoo installation. "
-echo -e "${GREEN}INFO:${NC} Logging enabled. Smart log to console and full log to ${BLUE}$FULL_LOGFILE_PATH${NC}."
+echo -e "${GREEN}INFO:${NC} Logging enabled. Smart log to console and a copy to ${BLUE}$FULL_LOGFILE_PATH${NC}."
 
 echo -e "${GREEN}-----------------------------------------------------------${NC}"
 #
@@ -518,35 +518,53 @@ echo -e "     ${GREEN}OK${NC}. Python ${BLUE}$PYTHON_VER${NC} installed successf
 
 if [ "$USE_PYTHON_VENV" = "True" ]; then
   echo -e "\n---- Creating Python virtual environment at ${BLUE}${OE_VENV}${NC} "
-
   python${PYTHON_VER} -m venv ${OE_VENV}
   echo -e "     ${GREEN}OK${NC}. Python virtual environment created."
 
   echo -e "\n---- Checking Python version used in venv"
-  VENV_PYTHON_VERSION=$($OE_VENV/bin/python3 --version)
-  echo -e "     ${YELLOW}$VENV_PYTHON_VERSION${NC}"
+  VENV_PYTHON_VERSION=$(${OE_VENV}/bin/python3 --version)
+  echo -e "     ${YELLOW}${VENV_PYTHON_VERSION}${NC}"
 
-  echo -e "\n---- Installing odoo pip requirements in virtual environment"
-  ${OE_VENV}/bin/pip install --quiet --upgrade pip setuptools
+  echo -e "\n---- Installing pip requirements (Odoo ${OE_VERSION}) in virtual environment"
+  ${OE_VENV}/bin/pip install --quiet --upgrade pip setuptools cython
   ${OE_VENV}/bin/pip install --quiet wheel
   ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
-  echo -e "     ${GREEN}OK${NC}. pip requirements installed in virtual environment."
   ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
-  echo -e "     ${GREEN}OK${NC}. pip gevent installed."
   ${OE_VENV}/bin/python3 -c "import zope.event; print('     \033[0;32mOK\033[0m. zope.event confirmed')"
 
+  echo -e "\n     ${YELLOW}NOTE${NC} Installed versions:"
+  echo -e "     ${BLUE}Python${NC}    version: ${YELLOW}${VENV_PYTHON_VERSION}${NC}"
+  CYTHON_VERSION=$(${OE_VENV}/bin/cython -V 2>&1)
+  echo -e "     ${BLUE}Cython${NC}    version: ${YELLOW}${CYTHON_VERSION}${NC}"
+  GEVENT_VERSION=$(${OE_VENV}/bin/python3 -m pip show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
+  if [ -n "$GEVENT_VERSION" ]; then
+    echo -e "     ${BLUE}gevent${NC}    version: ${YELLOW}${GEVENT_VERSION}${NC}"
+    echo -e "     ${GREEN}OK${NC}. gevent is installed and ready for workers mode."
+  else
+    echo -e "     ${YELLOW}WARNING:${NC} gevent not found. Odoo uses werkzeug and does not support workers or longpolling."
+  fi
+
 else
-  echo -e "\n---- Installing odoo pip requirements globally (no venv in use)"
+  echo -e "\n---- Installing pip requirements globally (no venv in use)"
+  sudo -H pip3 install --quiet --upgrade pip setuptools cython
+  sudo -H pip3 install --quiet wheel
   sudo -H pip3 install --quiet --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+  sudo -H pip3 install --quiet gevent greenlet zope.event
   echo -e "     ${GREEN}OK${NC}. pip requirements installed globally."
-  sudo pip3 install --quiet gevent greenlet zope.event
-  echo -e "     ${GREEN}OK${NC}. pip gevent installed globally."
+
+  echo -e "\n     ${YELLOW}NOTE${NC} Installed versions:"
+  echo -e "     ${BLUE}Python${NC}    version: ${YELLOW}$(python3 --version)${NC}"
+  CYTHON_VERSION=$(cython -V 2>&1)
+  echo -e "     ${BLUE}Cython${NC}    version: ${YELLOW}${CYTHON_VERSION}${NC}"
+  GEVENT_VERSION=$(pip3 show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
+  if [ -n "$GEVENT_VERSION" ]; then
+    echo -e "     ${BLUE}gevent${NC}    version: ${YELLOW}${GEVENT_VERSION}${NC}"
+    echo -e "     ${GREEN}OK${NC}. gevent is installed and ready for workers mode."
+  else
+    echo -e "     ${YELLOW}WARNING:${NC} gevent not found. Odoo uses werkzeug and does not support workers or longpolling."
+  fi
 fi
-if $OE_VENV/bin/python3 -m pip show gevent >/dev/null 2>&1; then
-  echo -e "     ${GREEN}OK${NC}. gevent is installed and ready for workers mode."
-else
-  echo -e "     ${YELLOW}WARNING:${NC} gevent not found. Odoo uses werkzeug and does not support workers or longpolling."
-fi
+
 
 echo -e "\n---- Installing ${BLUE}NodeJS, NPM${NC} and ${BLUE}rtlcss${NC} for RTL stylesheet support"
 sudo apt-get install -y nodejs npm 1>/dev/null
