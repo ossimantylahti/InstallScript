@@ -132,9 +132,11 @@ check_dpkg_lock() {
             NOW=$(date +%s)
             AGE=$((NOW - START_TIME))
 
-            if [ "$AGE" -ge 300 ]; then
-                echo -e "\n${YELLOW}WARNING${NC}: Detected lingering unattended-upgrade-shutdown process (PID ${YELLOW}$SHUTDOWN_PROC${NC}), running for ${YELLOW}${AGE}${NC}s${NC}"
-                echo -e "         Proceeding anyway, as the main upgrade process has already finished and the dpkg lock appears clear."
+            if [ "$AGE" -ge 180 ]; then
+                echo -e "\n     ${YELLOW}WARNING${NC}: Detected lingering unattended-upgrade-shutdown process "
+                echo -e "     (PID ${YELLOW}$SHUTDOWN_PROC${NC}), running for ${YELLOW}${AGE}${NC}s${NC}"
+                echo -e "     Proceeding anyway, as the main upgrade process has already finished "
+                echo -e "     and the dpkg lock appears clear."
                 break
             fi
         fi
@@ -200,7 +202,7 @@ echo -e "     Verifying that unattended-upgrades are finished${NC}\n     (this m
 check_dpkg_lock
 
 # Run apt update to refresh the package list after upgrades
-echo -e "Refreshing package index after unattended upgrades..."
+echo -e "---- Refreshing package index after unattended upgrades..."
 sudo apt-get update -y 1>/dev/null
 echo -e "     ${GREEN}OK${NC}. Package index updated. Proceeding with the installation."
 
@@ -408,7 +410,7 @@ if [ "$USE_ODOO_RECOMMENDED_POSTGRESQL_VERSION" = "True" ]; then
     fi
 
     # Install Odoo SA recommended PostgreSQL version
-    echo -e "     ${YELLOW}Installing PostgreSQL ${PG_VERSION}${NC} for Odoo ${OE_VERSION}"
+    echo -e "     ${YELLOW}NOTE${NC} Installing PostgreSQL ${BLUE}${PG_VERSION}${NC} for Odoo ${BLUE}${OE_VERSION}${NC}"
     sudo apt-get install -y "postgresql-${PG_VERSION}" "postgresql-server-dev-${PG_VERSION}" 1>/dev/null
 else
     echo -e "     ${YELLOW}NOTE${NC} Proceeding with the default PostgreSQL version based on Ubuntu repositories"
@@ -484,8 +486,8 @@ install_python() {
     fi
 
     if [[ "$deadsnakes_needed" == "true" ]]; then
-      echo -e "     ${YELLOW}Adding deadsnakes repository for legacy Python version${NC}"
-      sudo add-apt-repository -y ppa:deadsnakes/ppa 1>/dev/null 
+      echo -e "     ${YELLOW}INFO${NC} Adding ${BLUE}deadsnakes${NC} repository for legacy Python version${NC}"
+      sudo add-apt-repository -y ppa:deadsnakes/ppa 1>/dev/null
       sudo apt-get update 1>/dev/null
     fi
 
@@ -531,8 +533,27 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   echo -e "     ${YELLOW}${VENV_PYTHON_VERSION}${NC}"
 
   echo -e "\n---- Installing pip base tools into virtual environment"
+
   ${OE_VENV}/bin/pip install --quiet --upgrade pip
-  ${OE_VENV}/bin/pip install --quiet cython wheel
+  echo -e "\n---- Installing pip base tools into virtual environment"
+
+  ${OE_VENV}/bin/pip install --quiet --upgrade pip
+  ${OE_VENV}/bin/pip install --quiet setuptools wheel cython six requests
+
+  echo -e "     ${GREEN}OK${NC}. Base pip tools installed to Python venv."
+
+  # Version check
+  echo -e "\n     ${NC}Installed base pip tool versions:"
+  echo -e "     pip                 version: ${YELLOW}$(${OE_VENV}/bin/pip --version | awk '{print $2}')${NC}"
+  echo -e "     setuptools          version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import setuptools; print(setuptools.__version__)')${NC}"
+  echo -e "     wheel               version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import wheel; print(wheel.__version__)')${NC}"
+  echo -e "     cython              version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import Cython; print(Cython.__version__)')${NC}"
+  echo -e "     six                 version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import six; print(six.__version__)')${NC}"
+  echo -e "     requests            version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import requests; print(requests.__version__)')${NC}"
+  echo -e "     certifi             version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import certifi; print(certifi.__version__)')${NC}"
+  echo -e "     charset_normalizer  version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import charset_normalizer; print(charset_normalizer.__version__)')${NC}"
+  echo -e "     idna                version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import idna; print(idna.__version__)')${NC}"
+  echo -e "     urllib3             version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import urllib3; print(urllib3.__version__)')${NC}"
 
   # Version-specific handling for setuptools, greenlet, gevent
   if [[ "$OE_VERSION" == "17.0" || "$OE_VERSION" == "16.0" ]]; then
@@ -540,7 +561,11 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
     ${OE_VENV}/bin/pip install --quiet "setuptools==67.8.0"
     ${OE_VENV}/bin/pip install --quiet --no-build-isolation "greenlet==2.0.2" "gevent==23.9.1" "zope.event"
     echo -e "\n---- Installing remaining pip requirements from Odoo ${OE_VERSION} requirements.txt"
-    ${OE_VENV}/bin/pip install --quiet --no-deps -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+    # Download requirements.txt and remove gevent and greenlet before installation
+    REQ_URL="https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt"
+    REQ_CLEANED="/tmp/requirements-cleaned.txt"
+    curl -sSL "$REQ_URL" | grep -v -E '^(gevent|greenlet)([>=<].*)?$' > "$REQ_CLEANED"
+    ${OE_VENV}/bin/pip install --quiet --no-deps -r "$REQ_CLEANED"
   else
     echo -e "\n---- Installing pip requirements from Odoo ${OE_VERSION} requirements.txt (standard installation)"
     ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
@@ -583,7 +608,13 @@ fi
 echo -e "\n---- Verifying psycopg2"
 if ! ${OE_VENV}/bin/python3 -c "import psycopg2" &>/dev/null; then
   echo -e "     ${YELLOW}WARNING${NC}: psycopg2 missing, installing manually..."
-  ${OE_VENV}/bin/pip install --quiet psycopg2
+  #pep517 use is needed for psycopg2 to avoid build isolation issues.
+  #pep517 is a modern build system for Python packages and it should 
+  #be used when Python complier warns about deprecated or incompatible build systems.
+  #This is especially important for psycopg2 which has specific build requirements.
+  #If psycopg2 is not installed with --use-pep517, it may fail to build correctly
+  #due to missing dependencies or incompatible build environment.
+  ${OE_VENV}/bin/pip install --quiet --use-pep517 --no-build-isolation psycopg2
   echo -e "     ${GREEN}OK${NC}. psycopg2 installed manually."
 else
   echo -e "     ${GREEN}OK${NC}. psycopg2 already installed."
@@ -901,7 +932,8 @@ EOF
 
   sudo service nginx reload
   sudo su root -c "printf 'proxy_mode=True\n' >> /etc/${OE_CONFIG}.conf"
-  echo -e "     ${GREEN}OK${NC}. Nginx server is up and running. Configuration can be found at ${BLUE}/etc/nginx/sites-available/$WEBSITE_NAME${NC}."
+  echo -e "     ${GREEN}OK${NC}. Nginx server is up and running."
+  echo -e "     Configuration written to ${BLUE}/etc/nginx/sites-available/$WEBSITE_NAME${NC}."
 else
   echo "     ${YELLOW}INFO${NC}. Nginx is not installed due to user's choise."
 fi
@@ -919,7 +951,7 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
     #--------------------------------------------------
     # Validate snapd.socket status before using Certbot
     #--------------------------------------------------
-    echo -e "${YELLOW}-- Checking snapd.socket service status...${NC}"
+    echo -e "${NC}--   Checking ${YELLOW}snapd.socket${NC} service status...${NC}"
     SNAPD_STATUS=$(sudo systemctl is-active snapd.socket)
 
     if [[ "$SNAPD_STATUS" == "active" ]]; then
@@ -931,7 +963,7 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
     #--------------------------------------------------
     # Installing Certbot using snap and validating
     #--------------------------------------------------
-    echo -e "${YELLOW}-- Installing Certbot via snap. (This can take a long time, please be patient).${NC}"
+    echo -e "${NC}--   Installing ${YELLOW}Certbot${NC} via snap. ${NC}(This can take a long time, please be patient).${NC}"
     if sudo snap install --classic certbot 1>/dev/null; then
         echo -e "${GREEN}     OK${NC}. Certbot installed successfully via snap.${NC}"
     else
@@ -948,11 +980,11 @@ if [ $INSTALL_NGINX = "True" ] && [ $ENABLE_SSL = "True" ] && [ $ADMIN_EMAIL != 
 
   if [ "$USE_LETSENCRYPT_STAGING" = "True" ]; then
     CERTBOT_STAGE_ARG="--staging"
-    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt ${YELLOW}staging test${NC} environment to avoid rate limits."
+    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt ${GREEN}staging test${NC} environment to avoid rate limits."
     echo -e "     ${YELLOW}NOTE:${NC} This is for testing and development servers only." 
     echo -e "     ${YELLOW}NOTE:${NC} Use ${BLUE}USE_LETSENCRYPT_STAGING=False${NC} for production environment deployment."
   else
-    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt ${YELLOW}production${NC} environment."
+    echo -e "     ${YELLOW}NOTE:${NC} Using Let's Encrypt ${GREEN}production${NC} environment."
     CERTBOT_STAGE_ARG=""
   fi
   sudo certbot --nginx $CERTBOT_STAGE_ARG -d "$WEBSITE_NAME" --non-interactive --agree-tos -m "$ADMIN_EMAIL" --redirect --keep-until-expiring
