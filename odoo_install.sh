@@ -1,6 +1,6 @@
 #!/bin/bash
 ################################################################################
-# Script for installing Odoo on Ubuntu 22.04 and 24.04
+# Script for installing Odoo on Ubuntu 24.04 (and possibly 22.04).
 # Author: Yenthe Van Ginneken
 #-------------------------------------------------------------------------------
 # This script will install Odoo on your Ubuntu server. It can install multiple Odoo instances
@@ -36,8 +36,10 @@ OE_VERSION="17.0"
 # Select to use Python virtual environment or not. For moden Ubuntus 22.0 and later, this is mandatory.
 # Note: for Python Pip installations the script is calling pip as pip3.
 # For Virtual Environment installations, the script will use the pip from the virtual environment. See $OE_VENV/bin/pip
+# For Ubuntu 24.04 and later use of Python virtual environment is mandatory. Otherwise one has to use --break-system-packages option with pip3
+# and that risks breaking the system Python packages like Apt, Snap and others.
 USE_PYTHON_VENV="True"
-# Wkhtmltopdf is required for printing PDF reports in Odoo.
+# Wkhtmltopdf is required for printing PDF reports in Odoo. This will install the QT WebKit version of wkhtmltopdf.
 INSTALL_WKHTMLTOPDF="True"
 # Set this to True if you want to install the Odoo enterprise version!
 IS_ENTERPRISE="False"
@@ -94,7 +96,7 @@ pretty_colours() {
 #--------------------------------------------------
 check_dpkg_lock() {
     LOCKFILE="/var/lib/dpkg/lock-frontend"
-    echo -e "     Verifying that unattended-upgrades and dpkg locks are cleared before proceeding..."
+    echo -e "     Verifying that unattended-upgrades and dpkg locks are cleared before proceeding...\n"
 
     TIMEOUT=300  # Maximum wait time in seconds
     INTERVAL=1   # Poll interval
@@ -182,12 +184,17 @@ FULL_LOGFILE_PATH=$(readlink -f "$LOGFILE")
 # Without this check, the script may fail if dpkg is locked by an unattended upgrade process.
 # (Looking at you, Postgres)
 # --------------------------------------------------
-echo -e "${GREEN}==== ${NC} Odoo installation script started."
+echo -e "${GREEN}Welcome${NC} to Odoo Ubuntu installation script by Yenthe Van Ginneken and Ossi Mantylahti."
 echo -e ""
-echo -e "---- Preparing the system: waiting for automatic updates to complete...${NC}"
+echo -e "${NC}==== ${NC} Odoo installation script started."
+echo -e ""
+echo -e "     ${GREEN}INFO:${NC} Logging enabled. Smart log to console and a copy to ${BLUE}$FULL_LOGFILE_PATH${NC}."
+echo -e "${GREEN}-----------------------------------------------------------${NC}"
+
+echo -e "---- ${GREEN}INFO${NC} Preparing the system: waiting for automatic updates to complete...${NC}"
 
 # Wait for unattended-upgrades process to finish
-echo -n "     Verifying that unattended-upgrades are finished"
+echo -e "     Verifying that unattended-upgrades are finished${NC}\n     (this may take a while, please be patient)...\n"
 
 # Wait for dpkg frontend lock to be released
 check_dpkg_lock
@@ -198,10 +205,6 @@ sudo apt-get update -y 1>/dev/null
 echo -e "     ${GREEN}OK${NC}. Package index updated. Proceeding with the installation."
 
 
-echo -e "${NC}Starting Odoo installation. "
-echo -e "${GREEN}INFO:${NC} Logging enabled. Smart log to console and a copy to ${BLUE}$FULL_LOGFILE_PATH${NC}."
-
-echo -e "${GREEN}-----------------------------------------------------------${NC}"
 #
 ##
 ###  WKHTMLTOPDF download links
@@ -517,8 +520,9 @@ for pkg in gcc libpq-dev libsasl2-dev libldap2-dev libssl-dev; do
 done
 echo -e "     ${GREEN}OK${NC}. Python ${BLUE}$PYTHON_VER${NC} installed successfully."
 
+# Python virtual environment setup and dependency management for Odoo
 if [ "$USE_PYTHON_VENV" = "True" ]; then
-  echo -e "\n---- Creating Python virtual environment at ${BLUE}${OE_VENV}${NC} "
+  echo -e "\n---- Creating Python virtual environment at ${BLUE}${OE_VENV}${NC}"
   python${PYTHON_VER} -m venv ${OE_VENV}
   echo -e "     ${GREEN}OK${NC}. Python virtual environment created."
 
@@ -526,80 +530,75 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   VENV_PYTHON_VERSION=$(${OE_VENV}/bin/python3 --version)
   echo -e "     ${YELLOW}${VENV_PYTHON_VERSION}${NC}"
 
-  echo -e "\n---- Installing pip requirements (Odoo ${OE_VERSION}) in virtual environment"
-  ${OE_VENV}/bin/pip install --quiet --upgrade pip setuptools cython
-  ${OE_VENV}/bin/pip install --quiet wheel
-  ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
-  # Install gevent and greenlet for Odoo workers mode. no-build-isolation is needed to avoid issues with cython compilation
-  # Installing gevent, greenlet and zope.event (with build isolation disabled for gevent)
-  ${OE_VENV}/bin/pip install --quiet --no-build-isolation gevent greenlet zope.event
+  echo -e "\n---- Installing pip base tools into virtual environment"
+  ${OE_VENV}/bin/pip install --quiet --upgrade pip
+  ${OE_VENV}/bin/pip install --quiet cython wheel
 
-  # Verifying gevent installation
-  if ! ${OE_VENV}/bin/python3 -c "import gevent" &>/dev/null; then
-    echo -e "     ${YELLOW}WARNING${NC}: gevent not found after initial install, retrying..."
-    ${OE_VENV}/bin/pip install --quiet --no-build-isolation gevent
-    if ${OE_VENV}/bin/python3 -c "import gevent" &>/dev/null; then
-      echo -e "     ${GREEN}OK${NC}. gevent installed manually."
-    else
-      echo -e "     ${RED}ERROR${NC}: gevent installation failed even after retry."
-    fi
+  # Version-specific handling for setuptools, greenlet, gevent
+  if [[ "$OE_VERSION" == "17.0" || "$OE_VERSION" == "16.0" ]]; then
+    echo -e "\n---- Installing patched setuptools, greenlet, gevent for Odoo ${OE_VERSION}"
+    ${OE_VENV}/bin/pip install --quiet "setuptools==67.8.0"
+    ${OE_VENV}/bin/pip install --quiet --no-build-isolation "greenlet==2.0.2" "gevent==23.9.1" "zope.event"
+    echo -e "\n---- Installing remaining pip requirements from Odoo ${OE_VERSION} requirements.txt"
+    ${OE_VENV}/bin/pip install --quiet --no-deps -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
   else
-    echo -e "     ${GREEN}OK${NC}. gevent confirmed."
-  fi
-
-  # Verifying psycopg2
-  if ! ${OE_VENV}/bin/python3 -c "import psycopg2" &>/dev/null; then
-    echo -e "     ${YELLOW}WARNING${NC}: psycopg2 missing, installing manually..."
-    ${OE_VENV}/bin/pip install --quiet psycopg2
-    echo -e "     ${GREEN}OK${NC}. psycopg2 installed manually."
-  else
-    echo -e "     ${GREEN}OK${NC}. psycopg2 already installed."
-  fi
-
-  ${OE_VENV}/bin/python3 -c "import zope.event; print('     \033[0;32mOK\033[0m. zope.event confirmed')"
-
-  echo -e "\n     ${YELLOW}NOTE${NC} Installed versions:"
-  echo -e "     ${BLUE}Python${NC}    version: ${YELLOW}${VENV_PYTHON_VERSION}${NC}"
-  CYTHON_VERSION=$(${OE_VENV}/bin/cython -V 2>&1)
-  echo -e "     ${BLUE}Cython${NC}    version: ${YELLOW}${CYTHON_VERSION}${NC}"
-  GEVENT_VERSION=$(${OE_VENV}/bin/python3 -m pip show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
-  if [ -n "$GEVENT_VERSION" ]; then
-    echo -e "     ${BLUE}gevent${NC}    version: ${YELLOW}${GEVENT_VERSION}${NC}"
-    echo -e "     ${GREEN}OK${NC}. gevent is installed and ready for workers mode."
-  else
-    echo -e "     ${YELLOW}WARNING:${NC} gevent not found. Odoo uses werkzeug and does not support workers or longpolling."
+    echo -e "\n---- Installing pip requirements from Odoo ${OE_VERSION} requirements.txt (standard installation)"
+    ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+    ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
   fi
 
 else
-  echo -e "\n---- Installing pip requirements globally (no venv in use)"
-  sudo -H pip3 install --quiet --upgrade pip setuptools cython
-  sudo -H pip3 install --quiet wheel
-  sudo -H pip3 install --quiet --break-system-packages -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
-  sudo -H pip3 install --quiet gevent greenlet zope.event
-
-  # Verifying psycopg2. (Sometimes psycopg2 is not installed by default in Ubuntu 22.04 and later with Odoo's requirements.txt)
-  if ! python3 -c "import psycopg2" &>/dev/null; then
-    echo -e "     ${YELLOW}NOTICE${NC}: psycopg2 missing, installing manually..."
-    sudo -H pip3 install --quiet psycopg2
-    echo -e "     ${GREEN}OK${NC}. psycopg2 installed manually."
-  else
-    echo -e "     ${GREEN}OK${NC}. psycopg2 already installed."
-  fi
-
-  echo -e "\n     ${YELLOW}NOTE${NC} Installed versions:"
-  echo -e "     ${BLUE}Python${NC}    version: ${YELLOW}$(python3 --version)${NC}"
-  CYTHON_VERSION=$(cython -V 2>&1)
-  echo -e "     ${BLUE}Cython${NC}    version: ${YELLOW}${CYTHON_VERSION}${NC}"
-  GEVENT_VERSION=$(pip3 show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
-  if [ -n "$GEVENT_VERSION" ]; then
-    echo -e "     ${BLUE}gevent${NC}    version: ${YELLOW}${GEVENT_VERSION}${NC}"
-    echo -e "     ${GREEN}OK${NC}. gevent is installed and ready for workers mode."
-  else
-    echo -e "     ${YELLOW}WARNING:${NC} gevent not found. Odoo uses werkzeug and does not support workers or longpolling."
-  fi
+  echo -e "\n${RED}FATAL ERROR:${NC} Virtual environment is required for reliable Odoo installation. Exiting."
+  exit 1
 fi
 
+# Double check that critical versions were not overwritten
+GEVENT_VERSION=$(${OE_VENV}/bin/python3 -m pip show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
+if [ "$GEVENT_VERSION" != "23.9.1" ]; then
+  echo -e "     ${YELLOW}WARNING${NC}: gevent version overwritten to ${GEVENT_VERSION}. Reinstalling correct version..."
+  ${OE_VENV}/bin/pip install --quiet --no-build-isolation gevent==23.9.1 greenlet==2.0.2
+fi
+echo -e "\n---- Verifying setuptools installation"
+if ! ${OE_VENV}/bin/python3 -c "import setuptools" &>/dev/null; then
+  echo -e "     ${YELLOW}WARNING${NC}: setuptools missing, installing manually..."
+  ${OE_VENV}/bin/pip install --quiet setuptools==67.8.0
+  echo -e "     ${GREEN}OK${NC}. setuptools installed manually."
+else
+  echo -e "     ${GREEN}OK${NC}. setuptools already installed."
+fi
 
+echo -e "\n---- Verifying gevent installation"
+if ! ${OE_VENV}/bin/python3 -c "import gevent" &>/dev/null; then
+  echo -e "     ${YELLOW}WARNING${NC}: gevent not found after initial install, retrying..."
+  ${OE_VENV}/bin/pip install --quiet --no-build-isolation gevent
+  if ${OE_VENV}/bin/python3 -c "import gevent" &>/dev/null; then
+    echo -e "     ${GREEN}OK${NC}. gevent installed manually."
+  else
+    echo -e "     ${RED}ERROR${NC}: gevent installation failed even after retry."
+  fi
+else
+  echo -e "     ${GREEN}OK${NC}. gevent confirmed."
+fi
+
+echo -e "\n---- Verifying psycopg2"
+if ! ${OE_VENV}/bin/python3 -c "import psycopg2" &>/dev/null; then
+  echo -e "     ${YELLOW}WARNING${NC}: psycopg2 missing, installing manually..."
+  ${OE_VENV}/bin/pip install --quiet psycopg2
+  echo -e "     ${GREEN}OK${NC}. psycopg2 installed manually."
+else
+  echo -e "     ${GREEN}OK${NC}. psycopg2 already installed."
+fi
+
+echo -e "\n     ${YELLOW}NOTE${NC} Installed versions:"
+echo -e "     ${BLUE}Python${NC}    version: ${YELLOW}${VENV_PYTHON_VERSION}${NC}"
+CYTHON_VERSION=$(${OE_VENV}/bin/cython -V 2>&1)
+echo -e "     ${BLUE}Cython${NC}    version: ${YELLOW}${CYTHON_VERSION}${NC}"
+SETUPTOOLS_VERSION=$(${OE_VENV}/bin/pip show setuptools 2>/dev/null | grep ^Version | awk '{print $2}')
+echo -e "     ${BLUE}setuptools${NC} version: ${YELLOW}${SETUPTOOLS_VERSION}${NC}"
+GEVENT_VERSION=$(${OE_VENV}/bin/pip show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
+echo -e "     ${BLUE}gevent${NC}    version: ${YELLOW}${GEVENT_VERSION}${NC}"
+echo -e "     ${GREEN}OK${NC}. gevent is installed and ready for workers mode."
+${OE_VENV}/bin/python3 -c "import zope.event; print('     \033[0;32mOK\033[0m. zope.event confirmed')"
 
 echo -e "\n---- Installing ${BLUE}NodeJS, NPM${NC} and ${BLUE}rtlcss${NC} for RTL stylesheet support"
 sudo apt-get install -y nodejs npm 1>/dev/null
