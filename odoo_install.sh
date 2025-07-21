@@ -248,19 +248,19 @@ sudo apt-get upgrade -y 1>/dev/null
 echo -e "     ${GREEN}OK${NC}. System packages updated."
 
 # Development tools and compilers
-echo -e "    \n---- Installing build tools and compilers"
-sudo apt-get install -y gcc build-essential python3-dev python3-venv python3-wheel python3-setuptools 1>/dev/null
-echo -e "     ${GREEN}OK${NC}. Build tools installed."
+echo -e "\n---- Installing development tools and Python build support"
+sudo apt-get install -y gcc build-essential python3-dev python3-venv python3-wheel python3-setuptools cargo 1>/dev/null
+echo -e "     ${GREEN}OK${NC}. Development tools and Python build support installed."
 
-# PostgreSQL and authentication libraries
-echo -e "    \n---- Installing PostgreSQL and authentication libraries"
-sudo apt-get install -y libpq-dev libsasl2-dev libldap2-dev libssl-dev 1>/dev/null
-echo -e "     ${GREEN}OK${NC}. PostgreSQL and authentication dependencies installed."
+# PostgreSQL and cryptography-related system libraries
+echo -e "\n---- Installing PostgreSQL and cryptography/authentication libraries"
+sudo apt-get install -y libpq-dev libsasl2-dev libldap2-dev libssl-dev libffi-dev 1>/dev/null
+echo -e "     ${GREEN}OK${NC}. PostgreSQL and cryptography/auth dependencies installed."
 
-# Python & Odoo support packages
-echo -e "    \n---- Installing core Python & Odoo dependency packages"
+# Python runtime utilities and Odoo support tools
+echo -e "\n---- Installing Python utilities and Odoo runtime support packages"
 sudo apt-get install -y python3-cffi bc git wget plocate gdebi 1>/dev/null
-echo -e "     ${GREEN}OK${NC}. Core Python/Odoo packages installed."
+echo -e "     ${GREEN}OK${NC}. Python/Odoo runtime support packages installed."
 
 # Web rendering and compression libraries
 echo -e "    \n---- Installing rendering and compression libraries"
@@ -538,7 +538,18 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   echo -e "\n---- Installing pip base tools into virtual environment"
 
   ${OE_VENV}/bin/pip install --quiet --upgrade pip
+  # Normally Odoo requirements include these Python tools, but due to version conflicts they need to be installed separately
   ${OE_VENV}/bin/pip install --quiet setuptools wheel cython six requests
+
+  echo -e "\n---- Reinstalling cffi in source mode to ensure _cffi_backend is available"
+  ${OE_VENV}/bin/pip uninstall -y cffi cryptography pycparser 1>/dev/null
+  ${OE_VENV}/bin/pip install --quiet --no-binary :all: cffi
+  ${OE_VENV}/bin/pip install --quiet cryptography pycparser
+  echo -e "     ${GREEN}OK${NC}. cffi backend rebuilt successfully."
+  echo -e "     cffi version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import cffi; print(cffi.__version__)')${NC}"
+  echo -e "     cryptography version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import cryptography; print(cryptography.__version__)')${NC}"
+  echo -e "     _cffi_backend     check: ${YELLOW}$(${OE_VENV}/bin/python3 -c "import _cffi_backend; print('_cffi_backend OK')")${NC}"
+
 
   echo -e "     ${GREEN}OK${NC}. Base pip tools installed to Python venv."
 
