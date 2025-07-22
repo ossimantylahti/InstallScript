@@ -1,7 +1,7 @@
 #!/bin/bash
 ################################################################################
 # Script for installing Odoo on Ubuntu 24.04 (and possibly 22.04).
-# Authors: Yenthe Van Ginneken and Ossi Mantylahti
+# Authors: Yenthe Van Ginneken, Andre Schenkels and Ossi Mantylahti
 #-------------------------------------------------------------------------------
 # This script will install Odoo on your Ubuntu server. It can install multiple Odoo instances
 # in one Ubuntu with different xmlrpc_ports
@@ -96,7 +96,7 @@ done
 # ---------------------------------------------------
 
 # ---------------------------------------------------
-# INSTALLATION HELPER FUNCTIONS
+# INSTALLATION HELPER FUNCTIONS AND TABLES
 # ---------------------------------------------------
 
 pretty_colours() {
@@ -188,6 +188,132 @@ check_dpkg_lock() {
     done
 }
 
+# Undocumented Odoo requirements are packages that are not listed in the official Odoo requirements.txt file,
+# but are still required for Odoo to function properly. These packages are often dependencies of other packages
+# or are used by Odoo for specific features. The following list contains the undocumented Odoo requirements.
+# This list is based on the Odoo source code and may change in future versions.
+undocumented_odoo_requirements=(
+    babel pypdf2 passlib markupsafe defusedxml lxml python-dateutil ebaysdk pyserial pyusb aiosmtpd appdirs
+    asn1crypto asttokens atpublic attrs bcrypt beautifulsoup4 blessed bottleneck brotli bytecode cached-property
+    cachetools cbor2 certifi charset-normalizer comm contourpy coverage crudini cryptography cssselect cycler
+    dbfread debugpy defusedxml dnspython docopt docopt-ng entrypoints et-xmlfile executing feedparser
+    fonttools freetype-py fs geoip2 gevent-websocket google-auth html2text html5lib httpie httplib2 humanize
+    iniparse inotify ipykernel ipython isodate jedi jupyter_client jupyter_core kiwisolver lxml-html-clean lz4
+    mako markdown markdown-it-py markdown2 matplotlib matplotlib-inline maxminddb mdurl mpmath multidict
+    nest-asyncio netifaces numexpr numpy odfpy olefile openpyxl packaging pandas paramiko parso pdfminer.six
+    pexpect pg-activity phonenumbers pip platformdirs polib prompt-toolkit ptyprocess pudb pure-eval py
+    py-cpuinfo pyasn1 pyasn1-modules pycairo pycurl pydevd pydot pygments pygobject pyinotify pyjwt
+    pynacl pyopenssl pyp pypng pysocks python-ldap python-slugify python-stdnum python3-openid
+    pyyaml pyzbar pyzmq requests-file requests-toolbelt rich rjsmin rlpycairo roman rsa scipy setproctitle
+    setuptools sgmllib3k simplejson six soupsieve stack-data sympy tables tornado traitlets typing_extensions
+    unicodedata2 unidecode unittest2 urllib3 urwid urwid-readline wand watchdog wcwidth webencodings
+    websocket-client wheel xlrd xlwt xmlsec zope.event zope.interface
+  )
+
+# This is a mapping of pip package names to their import names. It is used to ensure that the correct import names are used
+# since in the great wisdom the developers of Python packages have decided to change the import names for some packages
+# differently than the pip package names.
+declare -A pip_import_map=(
+  ["pypdf2"]="PyPDF2"
+  ["cached-property"]="cached_property"
+  ["charset-normalizer"]="charset_normalizer"
+  ["defusedxml"]="defusedxml"
+  ["python-dateutil"]="dateutil"
+  ["requests-file"]="requests_file"
+  ["requests-toolbelt"]="requests_toolbelt"
+  ["lxml-html-clean"]="lxml.html.clean"
+  ["zope.event"]="zope.event"
+  ["zope.interface"]="zope.interface"
+  ["babel"]="babel"
+  ["markupsafe"]="markupsafe"
+  ["setuptools"]="setuptools"
+  ["wheel"]="wheel"
+  ["six"]="six"
+  ["pyyaml"]="yaml"
+  ["pypng"]="png"
+  ["rlpycairo"]="rlPyCairo"
+  ["pyjwt"]="jwt"
+  ["pyopenssl"]="OpenSSL"
+  ["html2text"]="html2text"
+  ["httpie"]="httpie"
+  ["pyasn1-modules"]="pyasn1_modules"
+  ["cryptography"]="cryptography"
+  ["freetype-py"]="freetype"
+  ["gevent-websocket"]="geventwebsocket"
+  ["psycopg2"]="psycopg2"
+  ["xmlsec"]="xmlsec"
+  ["python-slugify"]="slugify"
+  ["python3-openid"]="openid"
+  ["pdfminer.six"]="pdfminer"
+  ["pyserial"]="serial"
+  ["pyusb"]="usb"
+  ["jupyter_client"]="jupyter_client"
+  ["jupyter_core"]="jupyter_core"
+  ["attrs"]="attr"
+  ["beautifulsoup4"]="bs4"
+  ["atpublic"]="atpublic"  
+  ["asn1crypto"]="asn1crypto"
+  ["asttokens"]="asttokens"
+  ["bcrypt"]="bcrypt"
+  ["blessed"]="blessed"
+  ["brotli"]="brotli"
+  ["bytecode"]="bytecode"
+  ["cbor2"]="cbor2"
+  ["comm"]="comm"
+  ["contourpy"]="contourpy"
+  ["coverage"]="coverage"
+  ["crudini"]="crudini"
+  ["cssselect"]="cssselect"
+  ["cycler"]="cycler"
+  ["dbfread"]="dbfread"
+  ["dbus-python"]="dbus"
+  ["debugpy"]="debugpy"
+  ["dnspython"]="dns" #NOTE! Caution: This might cause a conflict with the dns package
+  ["docopt"]="docopt"
+  ["docopt-ng"]="docopt_ng"
+  ["entrypoints"]="entrypoints"
+  ["et-xmlfile"]="et_xmlfile"
+  ["executing"]="executing"
+  ["feedparser"]="feedparser"
+  ["fonttools"]="fontTools"
+  ["fs"]="fs"
+  ["geoip2"]="geoip2"
+  ["gyp"]="gyp"
+  ["html5lib"]="html5lib"
+  ["humanize"]="humanize"
+  ["iniparse"]="iniparse"
+  ["inotify"]="inotify"
+  ["ipykernel"]="ipykernel"
+  ["ipython"]="IPython" #NOTE! Caution: This might cause a conflict with the ipython package
+  ["isodate"]="isodate"
+  ["jedi"]="jedi"
+  ["kiwisolver"]="kiwisolver" 
+  ["docopt"]="docopt" 
+  ["docopt-ng"]="docopt_ng"
+  ["entrypoints"]="entrypoints"
+  ["et-xmlfile"]="et_xmlfile"
+  ["executing"]="executing"
+  ["feedparser"]="feedparser"
+  ["fonttools"]="fontTools"
+  ["fs"]="fs"
+  ["geoip2"]="geoip2"
+)
+
+# This is a list of Python packages that require no-build-isolation and PEP 517 build system
+#
+# Certain Python packages require no-build-isolation and PEP 517 build system.
+# These are exception cases; The package cannot be built with the default build parameters and must be installed with
+# -no-build-isolation and -use-pep517 build options.
+
+pep517_required_pkgs=(
+  pygobject
+  psycopg2
+  lxml
+  pycairo
+  pycurl
+  cryptography
+)
+
 #--------------------------------------------------
 # BEGIN INSTALLATION LOGIC
 #--------------------------------------------------
@@ -276,7 +402,7 @@ echo -e "     ${GREEN}OK${NC} System packages updated."
 
 # Development tools and compilers
 echo -e "\n---- Installing development tools and Python build support"
-sudo apt-get install -y gcc build-essential python3-dev python3-venv python3-wheel python3-setuptools cargo 1>/dev/null
+sudo apt-get install -y curl wget gcc build-essential python3-dev python3-venv python3-wheel python3-setuptools cargo 1>/dev/null
 sudo apt-get install -y pkg-config libdbus-1-dev libffi-dev cmake libcairo2-dev libgirepository1.0-dev gir1.2-glib-2.0 1>/dev/null
 echo -e "     ${GREEN}OK${NC} Development tools and Python build support installed."
 
@@ -287,7 +413,7 @@ echo -e "     ${GREEN}OK${NC} PostgreSQL and cryptography/auth dependencies inst
 
 # Python runtime utilities and Odoo support tools
 echo -e "\n---- Installing Python utilities and Odoo runtime support packages"
-sudo apt-get install -y python3-cffi bc git wget plocate gdebi 1>/dev/null
+sudo apt-get install -y python3-cffi bc git wget plocate gdebi python-apt 1>/dev/null
 echo -e "     ${GREEN}OK${NC} Python/Odoo runtime support packages installed."
 
 # Web rendering and compression libraries
@@ -599,183 +725,77 @@ echo -e "     ${GREEN}OK${NC} Base pip tools installed to Python venv."
 
 # Undocumented dependencies for Odoo 18+ versions
 #
-# These are not listed in requirements.txt but are needed for Odoo to function properly.
-# This list has been reverse engineered from Odoo 18+ source code and compared against requirements.txt.
+# Undocumented dependencies are not listed in requirements.txt but are needed for Odoo to function properly.
+# The list has been reverse engineered from Odoo 18+ source code and compared against requirements.txt.
 #
 
 if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
   echo -e "     ${YELLOW}NOTE${NC} Installing Odoo 18+ ${OE_VERSION} undocumented dependencies"
+  # Ensure build tools for pycairo and pygobject are present
+  if [[ " ${undocumented_odoo_requirements[*]} " =~ " pycairo " || " ${undocumented_odoo_requirements[*]} " =~ " pygobject " ]]; then
+    echo -e "     ${BLUE}INFO${NC} Installing build dependencies for pycairo and pygobject..."
+    sudo apt-get install -y --no-install-recommends libcairo2-dev libgirepository1.0-dev pkg-config gir1.2-glib-2.0 python3-dev > /dev/null
+    ${OE_VENV}/bin/pip install --quiet meson mesonpy ninja
+    echo -e "     ${GREEN}OK${NC} Build environment prepared."
+  fi
 
-  undocumented_odoo_requirements=(
-    babel pypdf2 passlib markupsafe defusedxml lxml python-dateutil ebaysdk pyserial pyusb aiosmtpd appdirs
-    asn1crypto asttokens atpublic attrs bcrypt beautifulsoup4 blessed bottleneck brotli bytecode cached-property
-    cachetools cbor2 certifi charset-normalizer comm contourpy coverage crudini cryptography cssselect cycler
-    dbfread dbus-python debugpy defusedxml dnspython docopt docopt-ng entrypoints et-xmlfile executing feedparser
-    fonttools freetype-py fs geoip2 gevent-websocket google-auth gyp html2text html5lib httpie httplib2 humanize
-    iniparse inotify ipykernel ipython isodate jedi jupyter_client jupyter_core kiwisolver lxml-html-clean lz4
-    mako markdown markdown-it-py markdown2 matplotlib matplotlib-inline maxminddb mdurl mpmath multidict
-    nest-asyncio netifaces numexpr numpy odfpy olefile openpyxl packaging pandas paramiko parso pdfminer.six
-    pexpect pg-activity phonenumbers pip platformdirs polib prompt-toolkit ptyprocess pudb pure-eval py
-    py-cpuinfo pyasn1 pyasn1-modules pyasyncore pycairo pycurl pydevd pydot pygments pygobject pyinotify pyjwt
-    pynacl pyopenssl pyp pypng pysocks python-apt python-ldap python-slugify python-stdnum python3-openid
-    pyyaml pyzbar pyzmq requests-file requests-toolbelt rich rjsmin rlpycairo roman rsa scipy setproctitle
-    setuptools sgmllib3k simplejson six soupsieve stack-data sympy tables tornado traitlets typing_extensions
-    unicodedata2 unidecode unittest2 urllib3 urwid urwid-readline wand watchdog wcwidth webencodings
-    websocket-client wheel xlrd xlwt xmlsec zope.event zope.interface
-  )
+  
+for pkg in "${undocumented_odoo_requirements[@]}"; do
+  import_name="${pip_import_map[$pkg]:-$pkg}"
+  echo -ne "     Installing ${import_name} ... "
 
-  declare -A pip_import_map=(
-    ["pypdf2"]="PyPDF2"
-    ["cached-property"]="cached_property"
-    ["charset-normalizer"]="charset_normalizer"
-    ["defusedxml"]="defusedxml"
-    ["python-dateutil"]="dateutil"
-    ["requests-file"]="requests_file"
-    ["requests-toolbelt"]="requests_toolbelt"
-    ["lxml-html-clean"]="lxml.html.clean"
-    ["zope.event"]="zope.event"
-    ["zope.interface"]="zope.interface"
-    ["babel"]="babel"
-    ["markupsafe"]="markupsafe"
-    ["setuptools"]="setuptools"
-    ["wheel"]="wheel"
-    ["six"]="six"
-    ["pyyaml"]="yaml"
-    ["pypng"]="png"
-    ["rlpycairo"]="rlPyCairo"
-    ["pyjwt"]="jwt"
-    ["pyopenssl"]="OpenSSL"
-    ["html2text"]="html2text"
-    ["httpie"]="httpie"
-    ["pyasn1-modules"]="pyasn1_modules"
-    ["cryptography"]="cryptography"
-    ["freetype-py"]="freetype"
-    ["gevent-websocket"]="geventwebsocket"
-    ["psycopg2"]="psycopg2"
-    ["xmlsec"]="xmlsec"
-    ["python-slugify"]="slugify"
-    ["python3-openid"]="openid"
-    ["pdfminer.six"]="pdfminer"
-    ["pyserial"]="serial"
-    ["pyusb"]="usb"
-    ["jupyter_client"]="jupyter_client"
-    ["jupyter_core"]="jupyter_core"
-    ["attrs"]="attr"
-    ["beautifulsoup4"]="bs4"
-    ["atpublic"]="atpublic"  
-    ["asn1crypto"]="asn1crypto"
-    ["asttokens"]="asttokens"
-    ["bcrypt"]="bcrypt"
-    ["blessed"]="blessed"
-    ["brotli"]="brotli"
-    ["bytecode"]="bytecode"
-    ["cbor2"]="cbor2"
-    ["comm"]="comm"
-    ["contourpy"]="contourpy"
-    ["coverage"]="coverage"
-    ["crudini"]="crudini"
-    ["cssselect"]="cssselect"
-    ["cycler"]="cycler"
-    ["dbfread"]="dbfread"
-    ["dbus-python"]="dbus"
-    ["debugpy"]="debugpy"
-    ["dnspython"]="dns" #NOTE! Caution: This might cause a conflict with the dns package
-    ["docopt"]="docopt"
-    ["docopt-ng"]="docopt_ng"
-    ["entrypoints"]="entrypoints"
-    ["et-xmlfile"]="et_xmlfile"
-    ["executing"]="executing"
-    ["feedparser"]="feedparser"
-    ["fonttools"]="fontTools"
-    ["fs"]="fs"
-    ["geoip2"]="geoip2"
-    ["gyp"]="gyp"
-    ["html5lib"]="html5lib"
-    ["humanize"]="humanize"
-    ["iniparse"]="iniparse"
-    ["inotify"]="inotify"
-    ["ipykernel"]="ipykernel"
-    ["ipython"]="IPython" #NOTE! Caution: This might cause a conflict with the ipython package
-    ["isodate"]="isodate"
-    ["jedi"]="jedi"
-    ["kiwisolver"]="kiwisolver" 
-    ["docopt"]="docopt" 
-    ["docopt-ng"]="docopt_ng"
-    ["entrypoints"]="entrypoints"
-    ["et-xmlfile"]="et_xmlfile"
-    ["executing"]="executing"
-    ["feedparser"]="feedparser"
-    ["fonttools"]="fontTools"
-    ["fs"]="fs"
-    ["geoip2"]="geoip2"
-  )
+  # Build install command
+  if [[ " ${pep517_required_pkgs[*]} " =~ " ${pkg} " ]]; then
+    install_cmd="${OE_VENV}/bin/pip install --quiet --no-build-isolation --use-pep517 $pkg"
+  else
+    install_cmd="${OE_VENV}/bin/pip install --quiet $pkg"
+  fi
 
+  # Execute installation
+  if ! eval "$install_cmd"; then
+    echo -e "${RED}FAILED${NC}"
+    echo -e "     ${YELLOW}Warning:${NC} Could not install ${pkg}. Skipping version check."
+    continue
+  else
+    echo -e "${GREEN}OK${NC}"
+  fi
 
-    # List of packages that require no-build-isolation and PEP 517 build system
-    pep517_required_pkgs=(
-      pygobject
-      psycopg2
-      lxml
-      pycairo
-      pycurl
-      cryptography
-    )
-
-    for pkg in "${undocumented_odoo_requirements[@]}"; do
-      import_name="${pip_import_map[$pkg]:-$pkg}"
-      echo -ne "     Installing ${import_name} ... "
-
-      # Check whether the current package requires special build options
-      if [[ " ${pep517_required_pkgs[*]} " =~ " ${pkg} " ]]; then
-        install_cmd="${OE_VENV}/bin/pip install --quiet --no-build-isolation --use-pep517 $pkg"
-      else
-        install_cmd="${OE_VENV}/bin/pip install --quiet $pkg"
-      fi
-
-      # Execute the pip installation command
-      if ! eval "$install_cmd"; then
-        echo -e "${RED}FAILED${NC}"
-        echo -e "     ${YELLOW}Warning:${NC} Could not install ${pkg}. Skipping version check."
-        continue
-      else
-        echo -e "${GREEN}OK${NC}"
-      fi
-
-      # Retrieve version number using importlib.metadata or fallback to __version__
-      version=$(${OE_VENV}/bin/python -c "
+  # Try multiple ways to get version
+  version=$(${OE_VENV}/bin/python3 <<EOF
+import sys
+try:
+    import importlib.metadata
+    print(importlib.metadata.version('${pkg}'))
+except Exception:
     try:
-        import importlib.metadata
-        print(importlib.metadata.version('${pkg}'))
+        import ${import_name} as mod
+        for attr in ('__version__', 'VERSION'):
+            if hasattr(mod, attr):
+                print(getattr(mod, attr))
+                sys.exit(0)
+        if hasattr(mod, 'get_version'):
+            print(mod.get_version())
+        else:
+            raise Exception("No version info found")
     except Exception:
         try:
-            import ${import_name} as m
-            print(getattr(m, '__version__', 'no __version__'))
+            import pkg_resources
+            dist = pkg_resources.get_distribution('${pkg}')
+            print(dist.version)
         except Exception:
             print('not found')
-    " 2>/dev/null | tr -d '\r')
+EOF
+  )
 
-      # Display the detected version (if any)
-      echo -e "     ${import_name} version: ${YELLOW}${version}${NC}"
-    done
+  version=$(echo "$version" | head -n1 | tr -d '\r')
 
+  if [[ "$version" == "not found" || -z "$version" ]]; then
+    echo -e "     ${YELLOW}Warning:${NC} Could not determine version for ${pkg}."
+  else
+    echo -e "     ${GREEN}OK${NC} ${pkg} version: ${YELLOW}${version}${NC}"
+  fi
+done
 
-    version=$(${OE_VENV}/bin/python -c "
-    try:
-        import importlib.metadata
-        print(importlib.metadata.version('${pkg}'))
-    except Exception:
-        try:
-            import ${import_name} as m
-            print(getattr(m, '__version__', 'no __version__'))
-        except Exception:
-            print('not found')
-    " 2>/dev/null | tr -d '\r')
-        if [ "$version" == "not found" ]; then
-          echo -e "     ${YELLOW}Warning:${NC} ${import_name} installed but version not found."
-        else
-          echo -e "     ${BLUE}${import_name}${NC} version: ${YELLOW}${version}${NC}"
-        fi
-  done
 fi
 
 
