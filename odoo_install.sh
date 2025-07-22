@@ -276,6 +276,7 @@ echo -e "     ${GREEN}OK${NC} System packages updated."
 # Development tools and compilers
 echo -e "\n---- Installing development tools and Python build support"
 sudo apt-get install -y gcc build-essential python3-dev python3-venv python3-wheel python3-setuptools cargo 1>/dev/null
+sudo apt-get install -y pkg-config libdbus-1-dev libffi-dev cmake libcairo2-dev 1>/dev/null
 echo -e "     ${GREEN}OK${NC} Development tools and Python build support installed."
 
 # PostgreSQL and cryptography-related system libraries
@@ -654,13 +655,73 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
       ["jupyter_client"]="jupyter_client"
       ["jupyter_core"]="jupyter_core"
       ["attrs"]="attr"
+      ["beautifulsoup4"]="bs4"
+      ["atpublic"]="atpublic"  
+      ["asn1crypto"]="asn1crypto"
+      ["asttokens"]="asttokens"
+      ["bcrypt"]="bcrypt"
+      ["blessed"]="blessed"
+      ["brotli"]="brotli"
+      ["bytecode"]="bytecode"
+      ["cbor2"]="cbor2"
+      ["comm"]="comm"
+      ["contourpy"]="contourpy"
+      ["coverage"]="coverage"
+      ["crudini"]="crudini"
+      ["cssselect"]="cssselect"
+      ["cycler"]="cycler"
+      ["dbfread"]="dbfread"
+      ["dbus-python"]="dbus"
+      ["debugpy"]="debugpy"
+      ["dnspython"]="dns" #NOTE! Caution: This might cause a conflict with the dns package
+      ["docopt"]="docopt"
+      ["docopt-ng"]="docopt_ng"
+      ["entrypoints"]="entrypoints"
+      ["et-xmlfile"]="et_xmlfile"
+      ["executing"]="executing"
+      ["feedparser"]="feedparser"
+      ["fonttools"]="fontTools"
+      ["fs"]="fs"
+      ["geoip2"]="geoip2"
+      ["gyp"]="gyp"
+      ["html5lib"]="html5lib"
+      ["humanize"]="humanize"
+      ["iniparse"]="iniparse"
+      ["inotify"]="inotify"
+      ["ipykernel"]="ipykernel"
+      ["ipython"]="IPython" #NOTE! Caution: This might cause a conflict with the ipython package
+      ["isodate"]="isodate"
+      ["jedi"]="jedi"
+      ["kiwisolver"]="kiwisolver" 
+      ["docopt"]="docopt" 
+      ["docopt-ng"]="docopt_ng"
+      ["entrypoints"]="entrypoints"
+      ["et-xmlfile"]="et_xmlfile"
+      ["executing"]="executing"
+      ["feedparser"]="feedparser"
+      ["fonttools"]="fontTools"
+      ["fs"]="fs"
+      ["geoip2"]="geoip2"
     )
+
 
     for pkg in "${undocumented_odoo_requirements[@]}"; do
       ${OE_VENV}/bin/pip install --quiet "$pkg"
       import_name="${pip_import_map[$pkg]:-$pkg}"
-      echo -e "     ${import_name} version: ${YELLOW}$(${OE_VENV}/bin/python -c "import $import_name; print($import_name.__version__ if hasattr($import_name, '__version__') else 'no __version__')")${NC}"
+      version=$(${OE_VENV}/bin/python -c "
+    try:
+        import importlib.metadata as m
+        print(m.version('$pkg'))
+    except Exception:
+        try:
+            import $import_name as mod
+            print(getattr(mod, '__version__', 'no __version__'))
+        except Exception:
+            print('VERSION NOT AVAILABLE')
+    ")
+      echo -e "     ${import_name} version: ${YELLOW}${version}${NC}"
     done
+
   fi
 
 
