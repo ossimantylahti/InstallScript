@@ -276,7 +276,7 @@ echo -e "     ${GREEN}OK${NC} System packages updated."
 # Development tools and compilers
 echo -e "\n---- Installing development tools and Python build support"
 sudo apt-get install -y gcc build-essential python3-dev python3-venv python3-wheel python3-setuptools cargo 1>/dev/null
-sudo apt-get install -y pkg-config libdbus-1-dev libffi-dev cmake libcairo2-dev 1>/dev/null
+sudo apt-get install -y pkg-config libdbus-1-dev libffi-dev cmake libcairo2-dev libgirepository1.0-dev gir1.2-glib-2.0 1>/dev/null
 echo -e "     ${GREEN}OK${NC} Development tools and Python build support installed."
 
 # PostgreSQL and cryptography-related system libraries
@@ -706,21 +706,36 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
 
 
     for pkg in "${undocumented_odoo_requirements[@]}"; do
-      ${OE_VENV}/bin/pip install --quiet "$pkg"
       import_name="${pip_import_map[$pkg]:-$pkg}"
+
+      echo -ne "     Installing ${import_name} ... "
+      if ! ${OE_VENV}/bin/pip install --quiet "$pkg"; then
+        echo -e "${RED}FAILED${NC}"
+        echo -e "     ${YELLOW}Warning:${NC} Could not install ${pkg}. Skipping version check."
+        continue
+      else
+        echo -e "${GREEN}OK${NC}"
+      fi
+
       version=$(${OE_VENV}/bin/python -c "
+    import sys, importlib
+    pkg = '$pkg'
+    import_name = '$import_name'
     try:
-        import importlib.metadata as m
-        print(m.version('$pkg'))
+        from importlib import metadata as m
+        print(m.version(pkg))
     except Exception:
         try:
-            import $import_name as mod
+            mod = importlib.import_module(import_name)
             print(getattr(mod, '__version__', 'no __version__'))
         except Exception:
-            print('VERSION NOT AVAILABLE')
-    ")
+            print('__version__ not found')
+    " 2>/dev/null | tr -d '\r')
+
       echo -e "     ${import_name} version: ${YELLOW}${version}${NC}"
     done
+
+
 
   fi
 
@@ -906,6 +921,8 @@ fi
 echo -e "\n==== Installing ODOO Server ===="
 sudo git clone --quiet --depth 1 --branch $OE_VERSION https://www.github.com/odoo/odoo $OE_HOME_EXT/
 echo -e "     ${GREEN}OK${NC} Odoo ${BLUE}$OE_VERSION${NC} source cloned from GitHub to ${OE_HOME_EXT}${NC}."
+echo -e "     Checked out Git branch: ${YELLOW}$(git --git-dir="${OE_HOME_EXT}/.git" --work-tree="${OE_HOME_EXT}" rev-parse --abbrev-ref HEAD)${NC}"
+
 
 if [ $IS_ENTERPRISE = "True" ]; then
     # Odoo Enterprise install!
