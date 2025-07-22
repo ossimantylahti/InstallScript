@@ -1,0 +1,13 @@
+{
+  // Enforce Unix-style line endings (LF) for all files
+  "files.eol": "\n",
+
+  // Automatically insert a final newline at the end of each file
+  "files.insertFinalNewline": true,
+
+  // Allow VS Code to guess file encoding (useful for shell scripts and multilingual files)
+  "files.autoGuessEncoding": true,
+
+  // Prevent automatic formatting on save to avoid unintended changes
+  "editor.formatOnSave": false
+}

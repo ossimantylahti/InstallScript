@@ -1,7 +1,7 @@
 #!/bin/bash
 ################################################################################
 # Script for installing Odoo on Ubuntu 24.04 (and possibly 22.04).
-# Author: Yenthe Van Ginneken
+# Authors: Yenthe Van Ginneken and Ossi Mantylahti
 #-------------------------------------------------------------------------------
 # This script will install Odoo on your Ubuntu server. It can install multiple Odoo instances
 # in one Ubuntu with different xmlrpc_ports
@@ -19,13 +19,13 @@
 #--------------------------------------------------
 
 # Set the odoo server website name
-WEBSITE_NAME="ubuntu3.odooserver.fi"                #FIXME REMEMBER TO CHANGE THIS BACK TO _ BEFORE PUBLIC RELEASE
+WEBSITE_NAME="ubuntu3.odooserver.fi"                    #FIXME! REMEMBER TO CHANGE THIS BACK TO _ BEFORE PUBLIC RELEASE
 # Set to true to install and configure nginx, "False" to skip nginx installation
 INSTALL_NGINX="True"
 # Set to "True" to install certbot and have ssl enabled, "False" to use http
 ENABLE_SSL="True"
 # Provide Email to register ssl certificate from Certbot
-ADMIN_EMAIL="odoo@example2.com"                     #FIXME REMEMBER TO CHANGE THIS BACK TO odoo@example.com BEFORE PUBLIC RELEASE
+ADMIN_EMAIL="odoo@example2.com"                         #FIXME! REMEMBER TO CHANGE THIS BACK TO odoo@example.com BEFORE PUBLIC RELEASE
 # USE_LETSENCRYPT_STAGING will choose wether to use Let's Encrypt staging test server to avoid hitting rate limits.
 # Change to "False" when deploying to a live sever. Keep the value as "True" for testing purposes.
 USE_LETSENCRYPT_STAGING="True"
@@ -38,6 +38,7 @@ OE_VERSION="18.0"
 # For Virtual Environment installations, the script will use the pip from the virtual environment. See $OE_VENV/bin/pip
 # For Ubuntu 24.04 and later use of Python virtual environment is mandatory. Otherwise one has to use --break-system-packages option with pip3
 # and that risks breaking the system Python packages like Apt, Snap and others.
+# NOTE: Virtual environment use is mandatory for Odoo 16.0 and later versions on Ubuntu 22.04 and later.
 USE_PYTHON_VENV="True"
 # Wkhtmltopdf is required for printing PDF reports in Odoo. This will install the QT WebKit version of wkhtmltopdf.
 INSTALL_WKHTMLTOPDF="True"
@@ -563,153 +564,176 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   echo -e "\n---- Checking Python version used in venv"
   VENV_PYTHON_VERSION=$(${OE_VENV}/bin/python3 --version)
   echo -e "     ${YELLOW}${VENV_PYTHON_VERSION}${NC}"
+else
+  echo -e "\n${RED}FATAL ERROR:${NC} Virtual environment is required for reliable Odoo installation in Ubuntu 22.04 and later. Exiting."
+  exit 1
+fi
 
-  echo -e "\n---- Installing pip into virtual environment"
 
-  ${OE_VENV}/bin/pip install --quiet --upgrade pip
-  echo -e "\n---- Installing pip base tools"
+echo -e "\n---- Installing pip into virtual environment"
 
-  # Normally Odoo requirements include these Python tools, but due to version conflicts they need to be installed separately
-  
-  ${OE_VENV}/bin/pip install --quiet setuptools wheel cython six requests 
-  
-  # Zeep and friends is a requirement since Odoo 18, but it is not included in the requirements.txt for some reason.
-  # In any case installing it does not mess up with anything.
-  if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
-    echo -e "     ${YELLOW}NOTE${NC} Installing zeep for Odoo 18+ ${OE_VERSION} support"
-    ${OE_VENV}/bin/pip install --quiet zeep defusedxml attrs cached-property isodate lxml platformdirs pytz requests-file requests-toolbelt
-  fi  
+${OE_VENV}/bin/pip install --quiet --upgrade pip
+echo -e "\n---- Installing pip base tools"
 
-  echo -e "\n---- Reinstalling cffi in source mode to ensure _cffi_backend is available"
-  ${OE_VENV}/bin/pip uninstall --yes cffi cryptography pycparser 1>/dev/null
-  ${OE_VENV}/bin/pip install --quiet --no-binary :all: cffi
-  ${OE_VENV}/bin/pip install --quiet cryptography pycparser
-  echo -e "     ${GREEN}OK${NC} cffi backend rebuilt successfully."
-  echo -e "     cffi version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import cffi; print(cffi.__version__)')${NC}"
-  echo -e "     cryptography version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import cryptography; print(cryptography.__version__)')${NC}"
-  echo -e "     _cffi_backend     check: ${YELLOW}$(${OE_VENV}/bin/python3 -c "import _cffi_backend; print('_cffi_backend OK')")${NC}"
+# Normally Odoo requirements include these Python tools, but due to version conflicts they need to be installed separately
 
-  echo -e "     ${GREEN}OK${NC} Base pip tools installed to Python venv."
+${OE_VENV}/bin/pip install --quiet setuptools wheel cython six requests 
 
-  # Undocumented dependencies for Odoo 18+ versions
-  #
-  # These are not listed in requirements.txt but are needed for Odoo to function properly.
-  # This list has been reverse engineered from Odoo 18+ source code and compared against requirements.txt.
-  #
-  
-  if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
-    echo -e "     ${YELLOW}NOTE${NC} Installing Odoo 18+ ${OE_VERSION} undocumented dependencies"
+# Zeep and friends is a requirement since Odoo 18, but it is not included in the requirements.txt for some reason.
+# In any case installing it does not mess up with anything.
+if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
+  echo -e "     ${YELLOW}NOTE${NC} Installing zeep for Odoo 18+ ${OE_VERSION} support"
+  ${OE_VENV}/bin/pip install --quiet zeep defusedxml attrs cached-property isodate lxml platformdirs pytz requests-file requests-toolbelt
+fi  
 
-    undocumented_odoo_requirements=(
-      babel pypdf2 passlib markupsafe defusedxml lxml python-dateutil ebaysdk pyserial pyusb aiosmtpd appdirs
-      asn1crypto asttokens atpublic attrs bcrypt beautifulsoup4 blessed bottleneck brotli bytecode cached-property
-      cachetools cbor2 certifi charset-normalizer comm contourpy coverage crudini cryptography cssselect cycler
-      dbfread dbus-python debugpy defusedxml dnspython docopt docopt-ng entrypoints et-xmlfile executing feedparser
-      fonttools freetype-py fs geoip2 gevent-websocket google-auth gyp html2text html5lib httpie httplib2 humanize
-      iniparse inotify ipykernel ipython isodate jedi jupyter_client jupyter_core kiwisolver lxml-html-clean lz4
-      mako markdown markdown-it-py markdown2 matplotlib matplotlib-inline maxminddb mdurl mpmath multidict
-      nest-asyncio netifaces numexpr numpy odfpy olefile openpyxl packaging pandas paramiko parso pdfminer.six
-      pexpect pg-activity phonenumbers pip platformdirs polib prompt-toolkit ptyprocess pudb pure-eval py
-      py-cpuinfo pyasn1 pyasn1-modules pyasyncore pycairo pycurl pydevd pydot pygments pygobject pyinotify pyjwt
-      pynacl pyopenssl pyp pypng pysocks python-apt python-ldap python-slugify python-stdnum python3-openid
-      pyyaml pyzbar pyzmq requests-file requests-toolbelt rich rjsmin rlpycairo roman rsa scipy setproctitle
-      setuptools sgmllib3k simplejson six soupsieve stack-data sympy tables tornado traitlets typing_extensions
-      unicodedata2 unidecode unittest2 urllib3 urwid urwid-readline wand watchdog wcwidth webencodings
-      websocket-client wheel xlrd xlwt xmlsec zope.event zope.interface
+echo -e "\n---- Reinstalling cffi in source mode to ensure _cffi_backend is available"
+${OE_VENV}/bin/pip uninstall --yes cffi cryptography pycparser 1>/dev/null
+${OE_VENV}/bin/pip install --quiet --no-binary :all: cffi
+${OE_VENV}/bin/pip install --quiet cryptography pycparser
+echo -e "     ${GREEN}OK${NC} cffi backend rebuilt successfully."
+echo -e "     cffi version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import cffi; print(cffi.__version__)')${NC}"
+echo -e "     cryptography version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import cryptography; print(cryptography.__version__)')${NC}"
+echo -e "     _cffi_backend     check: ${YELLOW}$(${OE_VENV}/bin/python3 -c "import _cffi_backend; print('_cffi_backend OK')")${NC}"
+
+echo -e "     ${GREEN}OK${NC} Base pip tools installed to Python venv."
+
+# Undocumented dependencies for Odoo 18+ versions
+#
+# These are not listed in requirements.txt but are needed for Odoo to function properly.
+# This list has been reverse engineered from Odoo 18+ source code and compared against requirements.txt.
+#
+
+if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
+  echo -e "     ${YELLOW}NOTE${NC} Installing Odoo 18+ ${OE_VERSION} undocumented dependencies"
+
+  undocumented_odoo_requirements=(
+    babel pypdf2 passlib markupsafe defusedxml lxml python-dateutil ebaysdk pyserial pyusb aiosmtpd appdirs
+    asn1crypto asttokens atpublic attrs bcrypt beautifulsoup4 blessed bottleneck brotli bytecode cached-property
+    cachetools cbor2 certifi charset-normalizer comm contourpy coverage crudini cryptography cssselect cycler
+    dbfread dbus-python debugpy defusedxml dnspython docopt docopt-ng entrypoints et-xmlfile executing feedparser
+    fonttools freetype-py fs geoip2 gevent-websocket google-auth gyp html2text html5lib httpie httplib2 humanize
+    iniparse inotify ipykernel ipython isodate jedi jupyter_client jupyter_core kiwisolver lxml-html-clean lz4
+    mako markdown markdown-it-py markdown2 matplotlib matplotlib-inline maxminddb mdurl mpmath multidict
+    nest-asyncio netifaces numexpr numpy odfpy olefile openpyxl packaging pandas paramiko parso pdfminer.six
+    pexpect pg-activity phonenumbers pip platformdirs polib prompt-toolkit ptyprocess pudb pure-eval py
+    py-cpuinfo pyasn1 pyasn1-modules pyasyncore pycairo pycurl pydevd pydot pygments pygobject pyinotify pyjwt
+    pynacl pyopenssl pyp pypng pysocks python-apt python-ldap python-slugify python-stdnum python3-openid
+    pyyaml pyzbar pyzmq requests-file requests-toolbelt rich rjsmin rlpycairo roman rsa scipy setproctitle
+    setuptools sgmllib3k simplejson six soupsieve stack-data sympy tables tornado traitlets typing_extensions
+    unicodedata2 unidecode unittest2 urllib3 urwid urwid-readline wand watchdog wcwidth webencodings
+    websocket-client wheel xlrd xlwt xmlsec zope.event zope.interface
+  )
+
+  declare -A pip_import_map=(
+    ["pypdf2"]="PyPDF2"
+    ["cached-property"]="cached_property"
+    ["charset-normalizer"]="charset_normalizer"
+    ["defusedxml"]="defusedxml"
+    ["python-dateutil"]="dateutil"
+    ["requests-file"]="requests_file"
+    ["requests-toolbelt"]="requests_toolbelt"
+    ["lxml-html-clean"]="lxml.html.clean"
+    ["zope.event"]="zope.event"
+    ["zope.interface"]="zope.interface"
+    ["babel"]="babel"
+    ["markupsafe"]="markupsafe"
+    ["setuptools"]="setuptools"
+    ["wheel"]="wheel"
+    ["six"]="six"
+    ["pyyaml"]="yaml"
+    ["pypng"]="png"
+    ["rlpycairo"]="rlPyCairo"
+    ["pyjwt"]="jwt"
+    ["pyopenssl"]="OpenSSL"
+    ["html2text"]="html2text"
+    ["httpie"]="httpie"
+    ["pyasn1-modules"]="pyasn1_modules"
+    ["cryptography"]="cryptography"
+    ["freetype-py"]="freetype"
+    ["gevent-websocket"]="geventwebsocket"
+    ["psycopg2"]="psycopg2"
+    ["xmlsec"]="xmlsec"
+    ["python-slugify"]="slugify"
+    ["python3-openid"]="openid"
+    ["pdfminer.six"]="pdfminer"
+    ["pyserial"]="serial"
+    ["pyusb"]="usb"
+    ["jupyter_client"]="jupyter_client"
+    ["jupyter_core"]="jupyter_core"
+    ["attrs"]="attr"
+    ["beautifulsoup4"]="bs4"
+    ["atpublic"]="atpublic"  
+    ["asn1crypto"]="asn1crypto"
+    ["asttokens"]="asttokens"
+    ["bcrypt"]="bcrypt"
+    ["blessed"]="blessed"
+    ["brotli"]="brotli"
+    ["bytecode"]="bytecode"
+    ["cbor2"]="cbor2"
+    ["comm"]="comm"
+    ["contourpy"]="contourpy"
+    ["coverage"]="coverage"
+    ["crudini"]="crudini"
+    ["cssselect"]="cssselect"
+    ["cycler"]="cycler"
+    ["dbfread"]="dbfread"
+    ["dbus-python"]="dbus"
+    ["debugpy"]="debugpy"
+    ["dnspython"]="dns" #NOTE! Caution: This might cause a conflict with the dns package
+    ["docopt"]="docopt"
+    ["docopt-ng"]="docopt_ng"
+    ["entrypoints"]="entrypoints"
+    ["et-xmlfile"]="et_xmlfile"
+    ["executing"]="executing"
+    ["feedparser"]="feedparser"
+    ["fonttools"]="fontTools"
+    ["fs"]="fs"
+    ["geoip2"]="geoip2"
+    ["gyp"]="gyp"
+    ["html5lib"]="html5lib"
+    ["humanize"]="humanize"
+    ["iniparse"]="iniparse"
+    ["inotify"]="inotify"
+    ["ipykernel"]="ipykernel"
+    ["ipython"]="IPython" #NOTE! Caution: This might cause a conflict with the ipython package
+    ["isodate"]="isodate"
+    ["jedi"]="jedi"
+    ["kiwisolver"]="kiwisolver" 
+    ["docopt"]="docopt" 
+    ["docopt-ng"]="docopt_ng"
+    ["entrypoints"]="entrypoints"
+    ["et-xmlfile"]="et_xmlfile"
+    ["executing"]="executing"
+    ["feedparser"]="feedparser"
+    ["fonttools"]="fontTools"
+    ["fs"]="fs"
+    ["geoip2"]="geoip2"
+  )
+
+
+    # List of packages that require no-build-isolation and PEP 517 build system
+    pep517_required_pkgs=(
+      pygobject
+      psycopg2
+      lxml
+      pycairo
+      pycurl
+      cryptography
     )
-
-    declare -A pip_import_map=(
-      ["pypdf2"]="PyPDF2"
-      ["cached-property"]="cached_property"
-      ["charset-normalizer"]="charset_normalizer"
-      ["defusedxml"]="defusedxml"
-      ["python-dateutil"]="dateutil"
-      ["requests-file"]="requests_file"
-      ["requests-toolbelt"]="requests_toolbelt"
-      ["lxml-html-clean"]="lxml.html.clean"
-      ["zope.event"]="zope.event"
-      ["zope.interface"]="zope.interface"
-      ["babel"]="babel"
-      ["markupsafe"]="markupsafe"
-      ["setuptools"]="setuptools"
-      ["wheel"]="wheel"
-      ["six"]="six"
-      ["pyyaml"]="yaml"
-      ["pypng"]="png"
-      ["rlpycairo"]="rlPyCairo"
-      ["pyjwt"]="jwt"
-      ["pyopenssl"]="OpenSSL"
-      ["html2text"]="html2text"
-      ["httpie"]="httpie"
-      ["pyasn1-modules"]="pyasn1_modules"
-      ["cryptography"]="cryptography"
-      ["freetype-py"]="freetype"
-      ["gevent-websocket"]="geventwebsocket"
-      ["psycopg2"]="psycopg2"
-      ["xmlsec"]="xmlsec"
-      ["python-slugify"]="slugify"
-      ["python3-openid"]="openid"
-      ["pdfminer.six"]="pdfminer"
-      ["pyserial"]="serial"
-      ["pyusb"]="usb"
-      ["jupyter_client"]="jupyter_client"
-      ["jupyter_core"]="jupyter_core"
-      ["attrs"]="attr"
-      ["beautifulsoup4"]="bs4"
-      ["atpublic"]="atpublic"  
-      ["asn1crypto"]="asn1crypto"
-      ["asttokens"]="asttokens"
-      ["bcrypt"]="bcrypt"
-      ["blessed"]="blessed"
-      ["brotli"]="brotli"
-      ["bytecode"]="bytecode"
-      ["cbor2"]="cbor2"
-      ["comm"]="comm"
-      ["contourpy"]="contourpy"
-      ["coverage"]="coverage"
-      ["crudini"]="crudini"
-      ["cssselect"]="cssselect"
-      ["cycler"]="cycler"
-      ["dbfread"]="dbfread"
-      ["dbus-python"]="dbus"
-      ["debugpy"]="debugpy"
-      ["dnspython"]="dns" #NOTE! Caution: This might cause a conflict with the dns package
-      ["docopt"]="docopt"
-      ["docopt-ng"]="docopt_ng"
-      ["entrypoints"]="entrypoints"
-      ["et-xmlfile"]="et_xmlfile"
-      ["executing"]="executing"
-      ["feedparser"]="feedparser"
-      ["fonttools"]="fontTools"
-      ["fs"]="fs"
-      ["geoip2"]="geoip2"
-      ["gyp"]="gyp"
-      ["html5lib"]="html5lib"
-      ["humanize"]="humanize"
-      ["iniparse"]="iniparse"
-      ["inotify"]="inotify"
-      ["ipykernel"]="ipykernel"
-      ["ipython"]="IPython" #NOTE! Caution: This might cause a conflict with the ipython package
-      ["isodate"]="isodate"
-      ["jedi"]="jedi"
-      ["kiwisolver"]="kiwisolver" 
-      ["docopt"]="docopt" 
-      ["docopt-ng"]="docopt_ng"
-      ["entrypoints"]="entrypoints"
-      ["et-xmlfile"]="et_xmlfile"
-      ["executing"]="executing"
-      ["feedparser"]="feedparser"
-      ["fonttools"]="fontTools"
-      ["fs"]="fs"
-      ["geoip2"]="geoip2"
-    )
-
 
     for pkg in "${undocumented_odoo_requirements[@]}"; do
       import_name="${pip_import_map[$pkg]:-$pkg}"
-
       echo -ne "     Installing ${import_name} ... "
-      if ! ${OE_VENV}/bin/pip install --quiet "$pkg"; then
+
+      # Check whether the current package requires special build options
+      if [[ " ${pep517_required_pkgs[*]} " =~ " ${pkg} " ]]; then
+        install_cmd="${OE_VENV}/bin/pip install --quiet --no-build-isolation --use-pep517 $pkg"
+      else
+        install_cmd="${OE_VENV}/bin/pip install --quiet $pkg"
+      fi
+
+      # Execute the pip installation command
+      if ! eval "$install_cmd"; then
         echo -e "${RED}FAILED${NC}"
         echo -e "     ${YELLOW}Warning:${NC} Could not install ${pkg}. Skipping version check."
         continue
@@ -717,93 +741,142 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
         echo -e "${GREEN}OK${NC}"
       fi
 
+      # Retrieve version number using importlib.metadata or fallback to __version__
       version=$(${OE_VENV}/bin/python -c "
-    import sys, importlib
-    pkg = '$pkg'
-    import_name = '$import_name'
     try:
-        from importlib import metadata as m
-        print(m.version(pkg))
+        import importlib.metadata
+        print(importlib.metadata.version('${pkg}'))
     except Exception:
         try:
-            mod = importlib.import_module(import_name)
-            print(getattr(mod, '__version__', 'no __version__'))
+            import ${import_name} as m
+            print(getattr(m, '__version__', 'no __version__'))
         except Exception:
-            print('__version__ not found')
+            print('not found')
     " 2>/dev/null | tr -d '\r')
 
+      # Display the detected version (if any)
       echo -e "     ${import_name} version: ${YELLOW}${version}${NC}"
     done
 
 
+    version=$(${OE_VENV}/bin/python -c "
+    try:
+        import importlib.metadata
+        print(importlib.metadata.version('${pkg}'))
+    except Exception:
+        try:
+            import ${import_name} as m
+            print(getattr(m, '__version__', 'no __version__'))
+        except Exception:
+            print('not found')
+    " 2>/dev/null | tr -d '\r')
+        if [ "$version" == "not found" ]; then
+          echo -e "     ${YELLOW}Warning:${NC} ${import_name} installed but version not found."
+        else
+          echo -e "     ${BLUE}${import_name}${NC} version: ${YELLOW}${version}${NC}"
+        fi
+  done
+fi
 
-  fi
 
+# Version-specific handling for setuptools, greenlet, gevent and zope.event
+if [[ "$OE_VERSION" =~ ^(18.0|17.0|16.0|15.0)$ ]]; then
+  echo -e "\n---- Installing tested versions of setuptools, greenlet, gevent and zope.event for Odoo ${OE_VERSION}"
 
-  # Version-specific handling for setuptools, greenlet, gevent
-  if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "17.0" || "$OE_VERSION" == "16.0" || "$OE_VERSION" == "15.0" ]]; then
-    echo -e "\n---- Installing patched setuptools, greenlet, gevent for Odoo ${OE_VERSION}"
-    ${OE_VENV}/bin/pip install --quiet "setuptools==67.8.0"
-    ${OE_VENV}/bin/pip install --quiet --no-build-isolation "greenlet==2.0.2" "gevent==23.9.1" "zope.event"
-    echo -e "\n---- Installing remaining pip requirements from Odoo ${OE_VERSION} requirements.txt"
-    # Download requirements.txt and remove gevent and greenlet before installation
-    REQ_URL="https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt"
-    REQ_CLEANED="/tmp/requirements-cleaned.txt"
-    curl -sSL "$REQ_URL" | grep -v -E '^(gevent|greenlet)([>=<].*)?$' > "$REQ_CLEANED"
-    ${OE_VENV}/bin/pip install --quiet --no-deps -r "$REQ_CLEANED"
-  else
-    echo -e "\n---- Installing pip requirements from Odoo ${OE_VERSION} requirements.txt (standard installation)"
-    ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
-    ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
-  fi
+  case "$OE_VERSION" in
+    "18.0")
+      SETUPTOOLS_VERSION="68.1.2"
+      GREENLET_VERSION="3.0.3"
+      GEVENT_VERSION="24.2.1"
+      ZOPE_EVENT_VERSION="5.0"
+      ;;
+    "17.0"|"16.0"|"15.0")
+      SETUPTOOLS_VERSION="59.6.0"
+      GREENLET_VERSION="1.1.2"
+      GEVENT_VERSION="21.8.0"
+      ZOPE_EVENT_VERSION="4.4"
+      ;;
+    *)
+      echo -e "${RED}ERROR${NC} Unsupported Odoo version for patched dependency install"
+      exit 1
+      ;;
+  esac
+
+  # Install version-matched base packages
+  ${OE_VENV}/bin/pip install --quiet "setuptools==${SETUPTOOLS_VERSION}"
+  ${OE_VENV}/bin/pip install --quiet --no-build-isolation "greenlet==${GREENLET_VERSION}" "gevent==${GEVENT_VERSION}" "zope.event==${ZOPE_EVENT_VERSION}"
+
+  echo -e "\n---- Installing remaining pip requirements from Odoo ${OE_VERSION} requirements.txt"
+
+  # Download and filter requirements.txt, removing greenlet and gevent
+  REQ_URL="https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt"
+  REQ_CLEANED="/tmp/requirements-cleaned.txt"
+  curl -sSL "$REQ_URL" | grep -v -E '^(gevent|greenlet)([>=<].*)?$' > "$REQ_CLEANED"
+  ${OE_VENV}/bin/pip install --quiet --no-deps -r "$REQ_CLEANED"
 
 else
-  echo -e "\n${RED}FATAL ERROR:${NC} Virtual environment is required for reliable Odoo installation. Exiting."
-  exit 1
+  echo -e "\n---- Installing pip requirements from Odoo ${OE_VERSION} requirements.txt (standard installation)"
+  ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+  ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
 fi
+
+
+
 
 # Double check that critical versions were not overwritten
-GEVENT_VERSION=$(${OE_VENV}/bin/python3 -m pip show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
-if [ "$GEVENT_VERSION" != "23.9.1" ]; then
-  echo -e "     ${YELLOW}WARNING${NC}: gevent version overwritten to ${GEVENT_VERSION}. Reinstalling correct version..."
-  ${OE_VENV}/bin/pip install --quiet --no-build-isolation gevent==23.9.1 greenlet==2.0.2
-fi
+echo -e "\n---- Double-checking core Python package versions"
+
+# Determine expected versions for this Odoo version
+case "$OE_VERSION" in
+  "18.0")
+    EXPECTED_GEVENT="24.2.1"
+    EXPECTED_GREENLET="3.0.3"
+    EXPECTED_SETUPTOOLS="68.1.2"
+    ;;
+  "17.0"|"16.0"|"15.0")
+    EXPECTED_GEVENT="21.8.0"
+    EXPECTED_GREENLET="1.1.2"
+    EXPECTED_SETUPTOOLS="59.6.0"
+    ;;
+  *)
+    EXPECTED_GEVENT=""
+    EXPECTED_GREENLET=""
+    EXPECTED_SETUPTOOLS=""
+    ;;
+esac
+
+# Verify setuptools
 echo -e "\n---- Verifying setuptools installation"
-if ! ${OE_VENV}/bin/python3 -c "import setuptools" &>/dev/null; then
-  echo -e "     ${YELLOW}WARNING${NC}: setuptools missing, installing manually..."
-  ${OE_VENV}/bin/pip install --quiet setuptools==67.8.0
-  echo -e "     ${GREEN}OK${NC} setuptools installed manually."
+SETUPTOOLS_VERSION=$(${OE_VENV}/bin/python3 -m pip show setuptools 2>/dev/null | grep ^Version | awk '{print $2}')
+if [[ "$SETUPTOOLS_VERSION" != "$EXPECTED_SETUPTOOLS" && -n "$EXPECTED_SETUPTOOLS" ]]; then
+  echo -e "     ${YELLOW}WARNING${NC}: setuptools version is ${SETUPTOOLS_VERSION:-not installed}, expected ${EXPECTED_SETUPTOOLS}. Reinstalling..."
+  ${OE_VENV}/bin/pip install --quiet "setuptools==${EXPECTED_SETUPTOOLS}"
+  echo -e "     ${GREEN}OK${NC} setuptools corrected to ${EXPECTED_SETUPTOOLS}."
 else
-  echo -e "     ${GREEN}OK${NC} setuptools already installed."
+  echo -e "     ${GREEN}OK${NC} setuptools version is ${SETUPTOOLS_VERSION}."
 fi
 
+# Verify gevent
 echo -e "\n---- Verifying gevent installation"
-if ! ${OE_VENV}/bin/python3 -c "import gevent" &>/dev/null; then
-  echo -e "     ${YELLOW}WARNING${NC}: gevent not found after initial install, retrying..."
-  ${OE_VENV}/bin/pip install --quiet --no-build-isolation gevent
-  if ${OE_VENV}/bin/python3 -c "import gevent" &>/dev/null; then
-    echo -e "     ${GREEN}OK${NC} gevent installed manually."
-  else
-    echo -e "     ${RED}ERROR${NC}: gevent installation failed even after retry."
-  fi
+GEVENT_VERSION=$(${OE_VENV}/bin/python3 -m pip show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
+if [[ "$GEVENT_VERSION" != "$EXPECTED_GEVENT" && -n "$EXPECTED_GEVENT" ]]; then
+  echo -e "     ${YELLOW}WARNING${NC}: gevent version is ${GEVENT_VERSION:-not installed}, expected ${EXPECTED_GEVENT}. Reinstalling..."
+  ${OE_VENV}/bin/pip install --quiet --no-build-isolation "gevent==${EXPECTED_GEVENT}" "greenlet==${EXPECTED_GREENLET}"
+  echo -e "     ${GREEN}OK${NC} gevent and greenlet corrected to expected versions."
 else
-  echo -e "     ${GREEN}OK${NC} gevent confirmed."
+  echo -e "     ${GREEN}OK${NC} gevent version is ${GEVENT_VERSION}."
 fi
 
-echo -e "\n---- Verifying psycopg2"
+# Verify psycopg2
+echo -e "\n---- Verifying psycopg2 installation"
 if ! ${OE_VENV}/bin/python3 -c "import psycopg2" &>/dev/null; then
   echo -e "     ${YELLOW}WARNING${NC}: psycopg2 missing, installing manually..."
-  #pep517 use is needed for psycopg2 to avoid build isolation issues.
-  #pep517 is a modern build system for Python packages and it should 
-  #be used when Python complier warns about deprecated or incompatible build systems.
-  #This is especially important for psycopg2 which has specific build requirements.
-  #If psycopg2 is not installed with --use-pep517, it may fail to build correctly
-  #due to missing dependencies or incompatible build environment.
   ${OE_VENV}/bin/pip install --quiet --use-pep517 --no-build-isolation psycopg2
   echo -e "     ${GREEN}OK${NC} psycopg2 installed manually."
 else
   echo -e "     ${GREEN}OK${NC} psycopg2 already installed."
 fi
+
 
 echo -e "\n     ${YELLOW}NOTE${NC} Installed versions:"
 echo -e "     ${BLUE}Python${NC}    version: ${YELLOW}${VENV_PYTHON_VERSION}${NC}"
@@ -816,14 +889,26 @@ echo -e "     ${BLUE}gevent${NC}    version: ${YELLOW}${GEVENT_VERSION}${NC}"
 echo -e "     ${GREEN}OK${NC} gevent is installed and ready for workers mode."
 ${OE_VENV}/bin/python3 -c "import zope.event; print('     \033[0;32mOK\033[0m. zope.event confirmed')"
 
-echo -e "\n---- Installing ${BLUE}NodeJS, NPM${NC} and ${BLUE}rtlcss${NC} for RTL stylesheet support"
+echo -e "\n---- Installing ${BLUE}NodeJS, NPM${NC}, ${BLUE}rtlcss${NC} and ${BLUE}node-gyp${NC} for frontend and build tool support"
 sudo apt-get install -y nodejs npm 1>/dev/null
-sudo npm install -g rtlcss 1>/dev/null
-echo -e "     ${GREEN}OK${NC} NodeJS, NPM and rtlcss installed."
+
+# Install rtlcss and node-gyp
+sudo npm install -g rtlcss node-gyp 1>/dev/null
+
+# Check install status and versions
+echo -e "     ${GREEN}OK${NC} NodeJS, NPM, rtlcss and node-gyp installed."
 echo -e "     ${YELLOW}NOTE${NC} Installed versions:"
-echo -e "     ${BLUE}NodeJS${NC}   version: ${YELLOW}$(node -v)${NC}"
-echo -e "     ${BLUE}NPM${NC}      version: ${YELLOW}$(npm -v)${NC}"
-echo -e "     ${BLUE}rtlcss${NC}   version: ${YELLOW}$(rtlcss -v)${NC}"
+
+NODE_VERSION=$(node -v 2>/dev/null || echo "not found")
+NPM_VERSION=$(npm -v 2>/dev/null || echo "not found")
+RTLCSS_VERSION=$(rtlcss -v 2>/dev/null || echo "not found")
+NODE_GYP_VERSION=$(node-gyp -v 2>/dev/null || echo "not found")
+
+echo -e "     ${BLUE}NodeJS${NC}     version: ${YELLOW}${NODE_VERSION}${NC}"
+echo -e "     ${BLUE}NPM${NC}        version: ${YELLOW}${NPM_VERSION}${NC}"
+echo -e "     ${BLUE}rtlcss${NC}     version: ${YELLOW}${RTLCSS_VERSION}${NC}"
+echo -e "     ${BLUE}node-gyp${NC}   version: ${YELLOW}${NODE_GYP_VERSION}${NC}"
+
 
 #--------------------------------------------------
 # Install Wkhtmltopdf (AppImage version)
