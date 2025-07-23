@@ -294,6 +294,8 @@ declare -A pip_import_map=(
   ["platformdirs"]="platformdirs"
   ["polib"]="polib"
   ["prompt-toolkit"]="prompt_toolkit"
+  ["python-slugify"]="slugify"
+  ["python-ldap"]="ldap"
   ["ptyprocess"]="ptyprocess"
   ["pudb"]="pudb"
   ["pure-eval"]="pure_eval"
@@ -314,6 +316,8 @@ declare -A pip_import_map=(
   ["pypng"]="png"
   ["pyserial"]="serial"
   ["pysocks"]="socks"
+  ["python3-openid"]="openid"
+  ["python-stdnum"]="stdnum"
   ["pyusb"]="usb"
   ["pyyaml"]="yaml"
   ["pyzbar"]="pyzbar.pyzbar"
@@ -325,7 +329,7 @@ declare -A pip_import_map=(
   ["rlpycairo"]="rlPyCairo"
   ["setuptools"]="setuptools"
   ["six"]="six"
-  ["stack_data"]="stack_data"
+  ["stack-data"]="stack_data"
   ["sympy"]="sympy"
   ["tables"]="tables"
   ["tornado"]="tornado"
@@ -346,6 +350,30 @@ declare -A pip_import_map=(
   ["xmlsec"]="xmlsec"
   ["zope.event"]="zope.event"
   ["zope.interface"]="zope.interface"
+  ["aiosmtpd"]="aiosmtpd"
+  ["appdirs"]="appdirs"
+  ["bottleneck"]="bottleneck"
+  ["cachetools"]="cachetools"
+  ["certifi"]="certifi"
+  ["cryptography"]="cryptography"
+  ["ebaysdk"]="ebaysdk"
+  ["google-auth"]="google.auth"
+  ["httplib2"]="httplib2"
+  ["passlib"]="passlib"
+  ["phonenumbers"]="phonenumbers"
+  ["pip"]="pip"
+  ["py"]="py"
+  ["pyp"]="pyp"
+  ["python-dateutil"]="dateutil"
+  ["roman"]="roman"
+  ["rsa"]="rsa"
+  ["scipy"]="scipy"
+  ["setproctitle"]="setproctitle"
+  ["sgmllib3k"]="sgmllib3k"
+  ["simplejson"]="simplejson"
+  ["soupsieve"]="soupsieve"
+  ["xlrd"]="xlrd"
+  ["xlwt"]="xlwt"
 )
 
 
@@ -745,7 +773,6 @@ else
   exit 1
 fi
 
-
 echo -e "\n---- Installing pip into virtual environment"
 
 ${OE_VENV}/bin/pip install --quiet --upgrade pip
@@ -754,7 +781,7 @@ echo -e "\n---- Installing pip base tools"
 # Normally Odoo requirements include these Python tools, but due to version conflicts they need to be installed separately
 if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then  
   # Ensure build tools for pycairo and pygobject are present
-    if [[ " ${undocumented_odoo_requirements[*]} " =~ " pycairo " || " ${undocumented_odoo_requirements[*]} " =~ " pygobject " ]]; then
+    if [[ " ${undocumented_odoo_requirements[*]} " =~ " pycairo " || " ${undocumented_odoo_requirements[*]} " =~ " pygobject " || " ${undocumented_odoo_requirements[*]} " =~ " gi " ]]; then
       echo -e "     ${BLUE}INFO${NC} Installing build dependencies for pycairo and pygobject..."
       sudo apt-get install -y --no-install-recommends libcairo2-dev libgirepository1.0-dev pkg-config gir1.2-glib-2.0 python3-dev > /dev/null
       ${OE_VENV}/bin/pip install --quiet meson mesonpy ninja
