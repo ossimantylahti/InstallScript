@@ -780,24 +780,42 @@ echo -e "\n---- Installing pip base tools"
 
 # Normally Odoo requirements include these Python tools, but due to version conflicts they need to be installed separately
 if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then  
-  # Ensure build tools for pycairo and pygobject are present
-    echo -e "     ${BLUE}INFO${NC} Installing build dependencies for pycairo and pygobject..."
-    sudo apt-get install -y --no-install-recommends libcairo2-dev libgirepository1.0-dev pkg-config gir1.2-glib-2.0 python3-dev > /dev/null
-    ${OE_VENV}/bin/pip install --quiet meson-python meson ninja
-    echo -e "     ${GREEN}OK${NC} Build environment prepared."
-    echo -e "     ${BLUE}Testing mesonpy build manually...${NC}"
-    ${OE_VENV}/bin/python3 -c "import mesonpy; print('     \033[0;32mOK\033[0m. mesonpy module is present')"
+  echo -e "     ${BLUE}INFO${NC} Installing system dependencies for pycairo and pygobject..."
 
-    # Verification
-    for pkg in libcairo2-dev libgirepository1.0-dev pkg-config gir1.2-glib-2.0 python3-dev; do
-      if dpkg -s "$pkg" >/dev/null 2>&1; then
-        echo -e "     ${GREEN}OK${NC} Package ${YELLOW}$pkg${NC} is installed."
-      else
-        echo -e "     ${RED}ERROR${NC} Package ${YELLOW}$pkg${NC} is missing!"
-      fi
-    done
-    echo 'import mesonpy; print("mesonpy import OK")' | ${OE_VENV}/bin/python3 || echo -e "${RED}ERROR${NC}: mesonpy not found in venv"
+  # Install all needed system packages for gi and cairo (Ubuntu 22.04 & 24.04 compatible)
+  # This is needed because gi packages cannot be installed via pip and must be installed via apt
+  # for Python versions under 3.12. And Odoo 18+ requires gi and cairo bindings, but needs
+  # Python 3.10.
+  sudo apt-get install -y --no-install-recommends \
+    python3-gi python3-cairo \
+    libcairo2-dev libgirepository1.0-dev libglib2.0-dev \
+    libffi-dev pkg-config build-essential \
+    gir1.2-glib-2.0 meson ninja-build python3-dev > /dev/null
+
+  # Verification of apt packages
+  for pkg in python3-gi python3-cairo libcairo2-dev libgirepository1.0-dev libglib2.0-dev libffi-dev pkg-config build-essential gir1.2-glib-2.0 meson ninja-build python3-dev; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then
+      echo -e "     ${GREEN}OK${NC} Package ${YELLOW}$pkg${NC} is installed."
+    else
+      echo -e "     ${RED}ERROR${NC} Package ${YELLOW}$pkg${NC} is missing!"
+    fi
+  done
+
+  # Set PYTHONPATH to include system gi and cairo bindings
+  export PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH"
+  echo "export PYTHONPATH=\"/usr/lib/python3/dist-packages:\$PYTHONPATH\"" >> ~/.bashrc
+
+  # Install meson-python to venv
+  ${OE_VENV}/bin/pip install --quiet meson-python
+  echo -e "     ${GREEN}OK${NC} Build environment prepared."
+
+  # Test imports
+  echo -e "     ${BLUE}Testing mesonpy and gi import...${NC}"
+  ${OE_VENV}/bin/python3 -c "import mesonpy; print('     \033[0;32mOK\033[0m. mesonpy module is present')" || echo -e "${RED}ERROR${NC}: mesonpy not found in venv"
+  PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH" ${OE_VENV}/bin/python3 -c "import gi; print('     \033[0;32mOK\033[0m. gi module is accessible')" || echo -e "${RED}ERROR${NC}: gi module not available"
 fi
+
+
 
 ${OE_VENV}/bin/pip install --quiet setuptools wheel cython six requests 
 
