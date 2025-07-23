@@ -781,16 +781,24 @@ echo -e "\n---- Installing pip base tools"
 # Normally Odoo requirements include these Python tools, but due to version conflicts they need to be installed separately
 if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then  
   # Ensure build tools for pycairo and pygobject are present
-    if [[ " ${undocumented_odoo_requirements[*]} " =~ " pycairo " || " ${undocumented_odoo_requirements[*]} " =~ " pygobject " || " ${undocumented_odoo_requirements[*]} " =~ " gi " ]]; then
-      echo -e "     ${BLUE}INFO${NC} Installing build dependencies for pycairo and pygobject..."
-      sudo apt-get install -y --no-install-recommends libcairo2-dev libgirepository1.0-dev pkg-config gir1.2-glib-2.0 python3-dev > /dev/null
-      ${OE_VENV}/bin/pip install --quiet meson mesonpy ninja
-      echo -e "     ${GREEN}OK${NC} Build environment prepared."
-      echo -e "     ${BLUE}Testing mesonpy build manually...${NC}"
-      echo 'import mesonpy; print("mesonpy import OK")' | ${OE_VENV}/bin/python3 || echo -e "${RED}ERROR${NC}: mesonpy not found in venv"
+    echo -e "     ${BLUE}INFO${NC} Installing build dependencies for pycairo and pygobject..."
+    sudo apt-get install -y --no-install-recommends libcairo2-dev libgirepository1.0-dev pkg-config gir1.2-glib-2.0 python3-dev > /dev/null
+    ${OE_VENV}/bin/pip install --quiet meson-python meson ninja
+    echo -e "     ${GREEN}OK${NC} Build environment prepared."
+    echo -e "     ${BLUE}Testing mesonpy build manually...${NC}"
+    ${OE_VENV}/bin/python3 -c "import mesonpy; print('     \033[0;32mOK\033[0m. mesonpy module is present')"
 
-    fi
-  fi
+    # Verification
+    for pkg in libcairo2-dev libgirepository1.0-dev pkg-config gir1.2-glib-2.0 python3-dev; do
+      if dpkg -s "$pkg" >/dev/null 2>&1; then
+        echo -e "     ${GREEN}OK${NC} Package ${YELLOW}$pkg${NC} is installed."
+      else
+        echo -e "     ${RED}ERROR${NC} Package ${YELLOW}$pkg${NC} is missing!"
+      fi
+    done
+    echo 'import mesonpy; print("mesonpy import OK")' | ${OE_VENV}/bin/python3 || echo -e "${RED}ERROR${NC}: mesonpy not found in venv"
+fi
+
 ${OE_VENV}/bin/pip install --quiet setuptools wheel cython six requests 
 
 # Zeep and friends is a requirement since Odoo 18, but it is not included in the requirements.txt for some reason.
