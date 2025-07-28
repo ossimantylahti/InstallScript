@@ -74,7 +74,26 @@ OE_MAX_CRON_THREADS="2"
 # Command line parameters
 #---------------------------------------------------
 
-# Check for -force-kill-unattended-upgrades flag
+# Command-line flag: -force-kill-unattended-upgrades
+#
+# What it does:
+#   If this flag is set, the script will forcibly terminate any running
+#   unattended-upgrade or unattended-upgrade-shutdown processes before continuing.
+#
+# Why use it:
+#   On Ubuntu 22.04 and 24.04, automatic background upgrades often run shortly after boot.
+#   These may hold a dpkg lock, blocking package installations such as PostgreSQL or Odoo.
+#   In some cases, the upgrade processes may become stuck. This flag allows the script
+#   to proceed by forcefully terminating those processes.
+#
+# When to use it:
+#   Use this flag in testing environments, automation pipelines, or when the script hangs
+#   waiting for dpkg lock and you are confident that the upgrade processes are no longer active.
+#
+# Warning: Use with caution. Terminating upgrade processes may leave the package system
+#   in an inconsistent state. Avoid using this on production servers unless necessary.
+#   In production environments just wait for unattended-upgrades to finish normally.
+
 FORCE_KILL_UPGRADES=false
 for arg in "$@"; do
   if [[ "$arg" == "-force-kill-unattended-upgrades" ]]; then
@@ -82,6 +101,25 @@ for arg in "$@"; do
     break
   fi
 done
+
+# Command-line flag: -preheat-os-only
+#
+# What it does:
+#   If this flag is set, the script performs only the operating system initialisation steps,
+#   including waiting for unattended upgrades to finish, installing base packages, and
+#   preparing system services such as snapd. It then exits without installing Odoo.
+#
+# Why use it:
+#   This is useful when preparing virtual machine images, containers, or infrastructure
+#   layers in advance of full Odoo installation. It helps confirm that the base environment
+#   is correctly configured before proceeding with heavier application setup.
+#   Essentially, once run, take a snapshot of the system state to have an easy return point.
+#
+# When to use it:
+#   Use this flag during image pre-provisioning, CI environments, or when debugging
+#   system-level configuration. It is safe to run multiple times.
+#
+# This flag performs no application-level changes and does not touch Odoo installation.
 
 PREHEAT_OS_ONLY=false
 for arg in "$@"; do
@@ -491,7 +529,8 @@ echo -e "     ${GREEN}OK${NC} PostgreSQL and cryptography/auth dependencies inst
 
 # Python runtime utilities and Odoo support tools
 echo -e "\n---- Installing Python utilities and Odoo runtime support packages"
-sudo apt-get install -y python3-cffi bc git wget plocate gdebi python3-apt 1>/dev/null
+sudo apt-get install -y python3-cffi bc git wget plocate gdebi jq 1>/dev/null
+sudo apt-get install -y python3-apt libnsl-dev libssl-dev libffi-dev 1>/dev/null
 echo -e "     ${GREEN}OK${NC} Python/Odoo runtime support packages installed."
 
 # Web rendering and compression libraries
@@ -550,6 +589,7 @@ echo -e "\n---- Refreshing core snap"
 SNAP_OUTPUT=$(sudo snap refresh core 2>&1)
 if [ $? -eq 0 ]; then
   echo -e "     ${SNAP_OUTPUT}"
+  echo -e "\n"
   echo -e "     ${GREEN}OK${NC} core snap refreshed."
 else
   echo -e "     ${YELLOW}WARNING.${NC} core snap refresh failed or not needed."
@@ -594,6 +634,7 @@ echo -e "     ${GREEN}OK${NC} Log directory created at ${BLUE}/var/log/$OE_USER$
 
 echo -e "\n---- Installing PostgreSQL Server"
 # Wait for dpkg frontend lock to be released
+echo -e "     Verifying that dpkg locks are cleared before proceeding...\n"
 check_dpkg_lock
 
 #--------------------------------------------------
@@ -717,6 +758,13 @@ install_python() {
     elif [[ "$ubuntu" == "24.04" && "$v" == "3.12" ]]; then
       # 3.12 is default in Ubuntu 24.04
       deadsnakes_needed="false"
+      for forbidden in 3.6 3.7 3.8 3.9 3.10 3.11; do
+        if command -v python$forbidden &>/dev/null; then
+          echo -e "${RED}FATAL ERROR:${NC} Detected conflicting Python version: python$forbidden"
+          echo -e "       Please remove it to avoid environment conflicts with Odoo ${OE_VERSION}."
+          exit 1
+        fi
+      done
     else
       echo -e "${RED}FATAL ERROR:${NC} Python ${v} is not available on Ubuntu ${ubuntu}, and no install rule is defined."
       exit 1
@@ -736,6 +784,51 @@ install_python() {
   fi
 }
 
+#--------------------------------------------------
+# Function: Check for conflicting Python installations
+# Ensures only the allowed Python version is present system-wide
+#--------------------------------------------------
+
+check_existing_python_installations() {
+  local allowed_version=$1         # e.g. 3.12
+  local allowed_prefix="python${allowed_version}"
+  local conflict_found="false"
+
+  echo -e "\n---- Verifying that no conflicting Python versions are installed..."
+
+  # Scan /usr/bin and /usr/local/bin for python3.X executables
+  local found_pythons
+  found_pythons=$(find /usr/bin /usr/local/bin -maxdepth 1 -type f -name "python3.*" -executable 2>/dev/null | sort | uniq)
+
+  for bin in $found_pythons; do
+    if [[ ! -x "$bin" ]]; then
+      continue
+    fi
+
+    # Get version string like '3.12.3'
+    local ver
+    ver=$($bin --version 2>/dev/null | awk '{print $2}')
+    local short="python${ver}"
+
+    # Accept version if it matches major.minor (e.g. python3.12 or python3.12.3 when allowed is python3.12)
+    if [[ ! "$short" =~ ^${allowed_prefix}(\.[0-9]+)?$ ]]; then
+      echo -e "     ${RED}ERROR:${NC} Found conflicting Python version: ${YELLOW}$short${NC} at ${BLUE}$bin${NC}"
+      conflict_found="true"
+    fi
+  done
+
+  if [[ "$conflict_found" == "true" ]]; then
+    echo -e "\n${RED}FATAL ERROR:${NC} Conflicting Python versions detected."
+    echo -e "     Only version ${YELLOW}$allowed_prefix${NC} is allowed for Odoo version ${YELLOW}$OE_VERSION${NC}."
+    echo -e "     Please remove the conflicting Python versions manually and rerun this script."
+    exit 1
+  else
+    echo -e "     ${GREEN}OK${NC} No conflicting Python versions found."
+  fi
+}
+
+
+
 case "$OE_VERSION" in
   "13.0")
     PYTHON_VER="3.6";;
@@ -744,15 +837,31 @@ case "$OE_VERSION" in
   "15.0"|"16.0")
     PYTHON_VER="3.9";;
   "17.0"|"18.0")
-    PYTHON_VER="3.10";;
+    PYTHON_VER="3.12";;
   "19.0")
-    PYTHON_VER="3.11";; #Preliminary support for Odoo 19.0
+    PYTHON_VER="3.12";; #Preliminary support for Odoo 19.0
   *)
     echo -e "${RED}ERROR${NC} Unsupported Odoo version: $OE_VERSION"; exit 1;;
 esac
-
+check_existing_python_installations "${PYTHON_VER}"
 install_python "${PYTHON_VER}"
 
+PYTHON_BIN=$(command -v python${PYTHON_VER})
+if [ -z "$PYTHON_BIN" ]; then
+  echo -e "${RED}FATAL ERROR:${NC} Python binary for version ${PYTHON_VER} not found in PATH."
+  exit 1
+fi
+
+# Confirm the binary really is the correct version
+PY_VERSION=$($PYTHON_BIN --version 2>&1)
+if ! echo "$PY_VERSION" | grep -q "$PYTHON_VER"; then
+  echo -e "${RED}FATAL ERROR:${NC} Python binary $PYTHON_BIN does not match expected version ${PYTHON_VER}. Got: $PY_VERSION"
+  exit 1
+fi
+
+echo -e  "     Using Python binary: ${BLUE}$PYTHON_BIN${NC} (${BLUE}$PY_VERSION${NC})${NC}"
+
+echo -e "\n---- Verifying system packages for Python ${PYTHON_VER} support"
 
 for pkg in gcc libpq-dev libsasl2-dev libldap2-dev libssl-dev; do
     dpkg -s $pkg &> /dev/null || { echo "Missing system packet: $pkg"; exit 1; }
@@ -770,6 +879,12 @@ if [ "$USE_PYTHON_VENV" = "True" ]; then
   echo -e "     ${YELLOW}${VENV_PYTHON_VERSION}${NC}"
 else
   echo -e "\n${RED}FATAL ERROR:${NC} Virtual environment is required for reliable Odoo installation in Ubuntu 22.04 and later. Exiting."
+  exit 1
+fi
+
+VENV_ACTUAL=$(${OE_VENV}/bin/python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+if [ "$VENV_ACTUAL" != "$PYTHON_VER" ]; then
+  echo -e "${RED}ERROR:${NC} Virtual environment was created with Python $VENV_ACTUAL, expected $PYTHON_VER."
   exit 1
 fi
 
@@ -817,7 +932,7 @@ fi
 
 
 
-${OE_VENV}/bin/pip install --quiet setuptools wheel cython six requests 
+${OE_VENV}/bin/pip install --quiet --upgrade setuptools wheel cython six requests 
 
 # Zeep and friends is a requirement since Odoo 18, but it is not included in the requirements.txt for some reason.
 # In any case installing it does not mess up with anything.
@@ -842,34 +957,70 @@ echo -e "     ${GREEN}OK${NC} Base pip tools installed to Python venv."
 # Undocumented dependencies are not listed in requirements.txt but are needed for Odoo to function properly.
 # The list has been reverse engineered from Odoo 18+ source code and compared against requirements.txt.
 #
+check_pep517_required() {
+  local pkg="$1"
+  local reason=""
+  local result="false"
+
+  # Query PyPI metadata (JSON API)
+  local pkg_json
+  pkg_json=$(curl -s "https://pypi.org/pypi/${pkg}/json")
+  if [[ -z "$pkg_json" ]]; then
+    echo "$result" ""  # Package not found
+    return
+  fi
+
+  # Get .tar.gz source URL
+  local url
+  url=$(echo "$pkg_json" | grep -oP '"url":\s*"\K[^"]+\.tar\.gz' | head -n1)
+  if [[ -z "$url" ]]; then
+    echo "$result" ""  # No source archive
+    return
+  fi
+
+  # Download and extract
+  local temp_dir
+  temp_dir=$(mktemp -d)
+  if curl -sL "$url" | tar -xz -C "$temp_dir" 2>/dev/null; then
+    if find "$temp_dir" -name "pyproject.toml" | grep -q .; then
+      result="true"
+      reason="pyproject.toml detected in source archive"
+    fi
+  fi
+  rm -rf "$temp_dir"
+  echo "$result" "$reason"
+}
+
 
 if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
   echo -e "     ${YELLOW}NOTE${NC} Installing Odoo 18+ ${OE_VERSION} undocumented dependencies"
 
+  for pkg in "${undocumented_odoo_requirements[@]}"; do
+    import_name="${pip_import_map[$pkg]:-$pkg}"
+    echo -ne "     Installing ${import_name} ... "
 
-  
-for pkg in "${undocumented_odoo_requirements[@]}"; do
-  import_name="${pip_import_map[$pkg]:-$pkg}"
-  echo -ne "     Installing ${import_name} ... "
+    # Check if --use-pep517 is required
+    read -r use_pep517 pep517_reason < <(check_pep517_required "$pkg")
 
-  # Build install command
-  if [[ " ${pep517_required_pkgs[*]} " =~ " ${pkg} " ]]; then
-    install_cmd="${OE_VENV}/bin/pip install --quiet --no-build-isolation --use-pep517 $pkg"
-  else
-    install_cmd="${OE_VENV}/bin/pip install --quiet $pkg"
-  fi
+    # Build install command
+    if [[ "$use_pep517" == "true" ]]; then
+      echo -ne "${YELLOW}(uses pyproject.toml thus enabling --use-pep517)${NC} "
+      install_cmd="${OE_VENV}/bin/pip install --quiet --no-build-isolation --use-pep517 $pkg"
+    else
+      install_cmd="${OE_VENV}/bin/pip install --quiet $pkg"
+    fi
 
-  # Execute installation
-  if ! eval "$install_cmd"; then
-    echo -e "${RED}FAILED${NC}"
-    echo -e "     ${YELLOW}Warning:${NC} Could not install ${pkg}. Skipping version check."
-    continue
-  else
-    echo -e "${GREEN}OK${NC}"
-  fi
+    # Execute installation
+    if ! eval "$install_cmd"; then
+      echo -e "${RED}FAILED${NC}"
+      echo -e "     ${YELLOW}Warning:${NC} Could not install ${pkg}. Skipping version check."
+      continue
+    else
+      echo -e "${GREEN}OK${NC}"
+    fi
 
-  # Try multiple ways to get version
-  version=$(${OE_VENV}/bin/python3 <<EOF
+    # Try multiple ways to get version
+version=$(${OE_VENV}/bin/python3 <<EOF
 import sys
 try:
     import importlib.metadata
@@ -893,18 +1044,21 @@ except Exception:
         except Exception:
             print('not found')
 EOF
-  )
+)
 
-  version=$(echo "$version" | head -n1 | tr -d '\r')
 
-  if [[ "$version" == "not found" || -z "$version" ]]; then
-    echo -e "     ${YELLOW}Warning:${NC} Could not determine version for ${pkg}."
-  else
-    echo -e "     ${GREEN}OK${NC} ${pkg} version: ${YELLOW}${version}${NC}"
-  fi
+    version=$(echo "$version" | head -n1 | tr -d '\r')
+
+    if [[ "$version" == "not found" || -z "$version" ]]; then
+      echo -e "     ${YELLOW}Warning:${NC} Could not determine version for ${pkg}."
+    else
+      echo -e "     ${GREEN}OK${NC} ${pkg} version: ${YELLOW}${version}${NC}"
+    fi
 done
 
-fi
+  
+
+
 
 
 # Version-specific handling for setuptools, greenlet, gevent and zope.event
@@ -913,6 +1067,10 @@ if [[ "$OE_VERSION" =~ ^(18.0|17.0|16.0|15.0)$ ]]; then
 
   case "$OE_VERSION" in
     "18.0")
+      # Versions chosen based on compatibility with:
+      # - Python 3.12 ABI changes
+      # - Official Odoo 18.0 requirements
+      # - gevent 24.x and greenlet 3.x pairing recommendations
       SETUPTOOLS_VERSION="68.1.2"
       GREENLET_VERSION="3.0.3"
       GEVENT_VERSION="24.2.1"
@@ -940,7 +1098,28 @@ if [[ "$OE_VERSION" =~ ^(18.0|17.0|16.0|15.0)$ ]]; then
   REQ_URL="https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt"
   REQ_CLEANED="/tmp/requirements-cleaned.txt"
   curl -sSL "$REQ_URL" | grep -v -E '^(gevent|greenlet)([>=<].*)?$' > "$REQ_CLEANED"
-  ${OE_VENV}/bin/pip install --quiet --no-deps -r "$REQ_CLEANED"
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    pkg=$(echo "$line" | sed 's/#.*//' | xargs)
+    [[ -z "$pkg" ]] && continue
+
+    echo -ne "     Installing ${YELLOW}${pkg}${NC} ... "
+
+    read -r use_pep517 pep517_reason < <(check_pep517_required "$pkg")
+
+    if [[ "$use_pep517" == "true" ]]; then
+      echo -ne "${YELLOW}(uses pyproject.toml; enabling --use-pep517)${NC} "
+      install_cmd="${OE_VENV}/bin/pip install --quiet --no-build-isolation --use-pep517 $pkg"
+    else
+      install_cmd="${OE_VENV}/bin/pip install --quiet $pkg"
+    fi
+
+    if ! eval "$install_cmd"; then
+      echo -e "${RED}FAILED${NC}"
+    else
+      echo -e "${GREEN}OK${NC}"
+    fi
+  done < "$REQ_CLEANED"
 
 else
   echo -e "\n---- Installing pip requirements from Odoo ${OE_VERSION} requirements.txt (standard installation)"
@@ -948,11 +1127,8 @@ else
   ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
 fi
 
-
-
-
 # Double check that critical versions were not overwritten
-echo -e "\n---- Double-checking core Python package versions"
+echo -e "\n---- Double-checking setuptools, gevent, and greenlet versions"
 
 # Determine expected versions for this Odoo version
 case "$OE_VERSION" in
@@ -994,6 +1170,18 @@ if [[ "$GEVENT_VERSION" != "$EXPECTED_GEVENT" && -n "$EXPECTED_GEVENT" ]]; then
 else
   echo -e "     ${GREEN}OK${NC} gevent version is ${GEVENT_VERSION}."
 fi
+
+# Verify greenlet
+echo -e "\n---- Verifying greenlet installation"
+GREENLET_VERSION=$(${OE_VENV}/bin/python3 -m pip show greenlet 2>/dev/null | grep ^Version | awk '{print $2}')
+if [[ "$GREENLET_VERSION" != "$EXPECTED_GREENLET" && -n "$EXPECTED_GREENLET" ]]; then
+  echo -e "     ${YELLOW}WARNING${NC}: greenlet version is ${GREENLET_VERSION:-not installed}, expected ${EXPECTED_GREENLET}. Reinstalling..."
+  ${OE_VENV}/bin/pip install --quiet --no-build-isolation "greenlet==${EXPECTED_GREENLET}" "gevent==${EXPECTED_GEVENT}"
+  echo -e "     ${GREEN}OK${NC} greenlet and gevent corrected to expected versions."
+else
+  echo -e "     ${GREEN}OK${NC} greenlet version is ${GREENLET_VERSION}."
+fi
+
 
 # Verify psycopg2
 echo -e "\n---- Verifying psycopg2 installation"
