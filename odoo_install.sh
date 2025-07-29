@@ -68,6 +68,9 @@ OE_VENV="$OE_HOME/venv"
 OE_WORKERS="2"
 # Maximum number of cron jobs to run at the same time. Set to 0 for no cron jobs.
 OE_MAX_CRON_THREADS="2"
+# Pythonpath is needed for Odoo to find the systemPython packages installed by pip.
+export PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH"
+
 #---------------------------------------------------
 
 #---------------------------------------------------
@@ -134,15 +137,32 @@ done
 # ---------------------------------------------------
 
 # ---------------------------------------------------
-# INSTALLATION HELPER FUNCTIONS AND TABLES
+# BEGIN INSTALLATION HELPER FUNCTIONS AND VARIABLE TABLES
 # ---------------------------------------------------
 
+#--------------------------------------------------
+# Function: pretty_colours
+#
+# Purpose:
+#   Defines ANSI escape codes for coloured terminal output. These colour variables
+#   improve readability of log messages throughout the installation script.
+#
+# Variables Set:
+#   YELLOW  - Bold yellow text (typically used for warnings or neutral info)
+#   GREEN   - Bold green text (used for success messages)
+#   RED     - Bold red text (used for fatal errors)
+#   BLUE    - Bold blue text (used for highlights and headings)
+#   NC      - Resets colour to terminal default (No Colour)
+#
+# Usage:
+#   Call this function once at the beginning of the script before any colourised output.
+#
+# Notes:
+#   These variables are exported as shell variables and assumed to be used with `echo -e`.
+#   They are intended for use in multi-line log blocks and inline status messages.
+#--------------------------------------------------
+
 pretty_colours() {
-    # Function to set up pretty colors for terminal output
-    # This function is called at the beginning of the script to set up color variables
-    # so that they can be used throughout the script for better readability.
-    # ANSI escape codes are used to define colors.    
-    # Set ANSI colors
     YELLOW='\033[1;33m'
     GREEN='\033[1;32m'
     RED='\033[1;31m'
@@ -152,13 +172,37 @@ pretty_colours() {
 
 
 #--------------------------------------------------
-# Check function for package manager locks
+# Function: check_dpkg_lock
+#
+# Purpose:
+#   Ensures that no package management operations are in progress before continuing.
+#   This includes checking for active 'unattended-upgrade' processes and verifying
+#   that the dpkg frontend lock is released.
+#
+# Behaviour:
+#   - Polls every second for a maximum of 180 seconds (3 minutes)
+#   - Detects and logs the status of unattended-upgrade and dpkg lock ownership
+#   - If only an unattended-upgrade-shutdown process remains after 3 minutes,
+#     it proceeds with a warning assuming upgrades are complete
+#   - Exits fatally if timeout is reached while locks or processes persist
+#
+# Usage:
+#   Call this function before running apt or dpkg commands to avoid lock conflicts.
+#
+# Output:
+#   - Logs detailed status of upgrade processes and dpkg lock ownership
+#   - Exits with error if unable to proceed safely
+#
+# Notes:
+#   - Recommended for Ubuntu 20.04+, especially 22.04 and 24.04 where automatic
+#     background upgrades are common immediately after boot
 #--------------------------------------------------
+
 check_dpkg_lock() {
     LOCKFILE="/var/lib/dpkg/lock-frontend"
     echo -e "     Verifying that unattended-upgrades and dpkg locks are cleared before proceeding...\n"
 
-    TIMEOUT=300  # Maximum wait time in seconds
+    TIMEOUT=180  # Maximum wait time in seconds
     INTERVAL=1   # Poll interval
     ELAPSED=0
 
@@ -192,7 +236,7 @@ check_dpkg_lock() {
             NOW=$(date +%s)
             AGE=$((NOW - START_TIME))
 
-            if [ "$AGE" -ge 180 ]; then
+            if [ "$AGE" -ge 300 ]; then
                 echo -e "\n     ${YELLOW}WARNING${NC}: Detected lingering unattended-upgrade-shutdown process "
                 echo -e "     (PID ${YELLOW}$SHUTDOWN_PROC${NC}), running for ${YELLOW}${AGE}${NC}s${NC}"
                 echo -e "     Proceeding anyway, as the main upgrade process has already finished "
@@ -226,10 +270,89 @@ check_dpkg_lock() {
     done
 }
 
-# Undocumented Odoo requirements are packages that are not listed in the official Odoo requirements.txt file,
-# but are still required for Odoo to function properly. These packages are often dependencies of other packages
-# or are used by Odoo for specific features. The following list contains the undocumented Odoo requirements.
-# This list is based on the Odoo source code and may change in future versions.
+#--------------------------------------------------
+# Function: get_python_package_version
+#
+# Purpose:
+#   Attempts to determine the installed version of a given Python package
+#   by querying multiple metadata sources within the virtual environment.
+#
+# Parameters:
+#   $1 - The name of the package as known to pip (e.g. "lxml")
+#   $2 - The import name used in Python code (e.g. "lxml" or "lxml.html.clean")
+#
+# Method:
+#   1. Tries to read version using importlib.metadata (Python 3.8+)
+#   2. Falls back to importing the module and checking common version attributes
+#   3. If that fails, uses pkg_resources.get_distribution
+#
+# Output:
+#   Prints the version string to stdout, or "not found" if version cannot be determined
+#
+# Notes:
+#   - This function uses the Python interpreter from the virtual environment.
+#   - Output should be captured and cleaned up by the calling function.
+#   - The code is written as Heredoc to avoid issues with shell variable expansion.
+#     do NOT alter the indentation, especially the indentation of the EOF marker.
+#--------------------------------------------------
+
+get_python_package_version() {
+  local pkg="$1"
+  local import_name="$2"
+
+  PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH" ${OE_VENV}/bin/python3 <<EOF
+import sys
+try:
+    import importlib.metadata
+    print(importlib.metadata.version('${pkg}'))
+except Exception:
+    try:
+        import ${import_name} as mod
+        for attr in ('__version__', 'VERSION'):
+            if hasattr(mod, attr):
+                print(getattr(mod, attr))
+                sys.exit(0)
+        if hasattr(mod, 'get_version'):
+            print(mod.get_version())
+        else:
+            raise Exception("No version info found")
+    except Exception:
+        try:
+            import pkg_resources
+            dist = pkg_resources.get_distribution('${pkg}')
+            print(dist.version)
+        except Exception:
+            print('not found')
+EOF
+}
+
+#--------------------------------------------------
+# Variable: undocumented_odoo_requirements
+#
+# Purpose:
+#   Contains a list of Python packages that are required for Odoo to operate correctly,
+#   but which are not explicitly listed in Odoo's official requirements.txt file.
+#
+# Background:
+#   Odoo relies on a number of indirect and runtime dependencies that are either:
+#     - Imported dynamically in source code (e.g. optional modules),
+#     - Pulled in by add-ons during module installation,
+#     - Used by specific features like PDF rendering, geolocation, or websocket support.
+#
+# Usage:
+#   These packages are installed explicitly by the installation script
+#   to ensure that all features of Odoo work without runtime errors.
+#
+# Source:
+#   This list was curated by reviewing the Odoo source code (especially 17.0 and 18.0),
+#   comparing it with requirements.txt, and analysing import errors encountered during deployment.
+#
+# Notes:
+#   - The list is version-sensitive and may change in future Odoo releases.
+#   - Some packages in this list are required only in certain editions (e.g. Enterprise).
+#   - The import names may differ from the package names; see `pip_import_map` for mappings.
+#--------------------------------------------------
+
 undocumented_odoo_requirements=(
     babel pypdf2 passlib markupsafe defusedxml lxml python-dateutil ebaysdk pyserial pyusb aiosmtpd appdirs
     asn1crypto asttokens atpublic attrs bcrypt beautifulsoup4 blessed bottleneck brotli bytecode cached-property
@@ -246,11 +369,34 @@ undocumented_odoo_requirements=(
     setuptools sgmllib3k simplejson six soupsieve stack-data sympy tables tornado traitlets typing_extensions
     unicodedata2 unidecode unittest2 urllib3 urwid urwid-readline wand watchdog wcwidth webencodings
     websocket-client wheel xlrd xlwt xmlsec zope.event zope.interface
-  )
+    )
 
-# This is a mapping of pip package names to their import names. It is used to ensure that the correct import names are used
-# since in the great wisdom the developers of Python packages have decided to change the import names for some packages
-# differently than the pip package names.
+#--------------------------------------------------
+# Variable: pip_import_map
+#
+# Purpose:
+#   Defines a mapping between pip package names (as used in installation commands)
+#   and their actual import names in Python source code. This is necessary because
+#   some Python packages use inconsistent naming conventions between distribution
+#   names (used with pip) and module names (used with `import` statements).
+#
+# Usage:
+#   Used when dynamically importing a module in Python (e.g. to check version info),
+#   ensuring that the correct import name is referenced regardless of pip name.
+#
+# Examples:
+#   - The pip package `beautifulsoup4` is imported as `bs4`
+#   - The pip package `pdfminer.six` is imported as `pdfminer`
+#   - The pip package `pycairo` is imported as `cairo`
+#
+# Notes:
+#   - Only packages with mismatched pip/import names need to be listed here.
+#     For others, the pip name can be used directly as the import name.
+#   - This map supports the version-checking logic in the installation script
+#     by resolving ambiguous or misleading package/module relationships.
+#   - Keys are pip distribution names, values are corresponding Python module names.
+#--------------------------------------------------
+
 declare -A pip_import_map=(
   ["asn1crypto"]="asn1crypto"
   ["asttokens"]="asttokens"
@@ -415,11 +561,37 @@ declare -A pip_import_map=(
 )
 
 
-# This is a list of Python packages that require no-build-isolation and PEP 517 build system
+#--------------------------------------------------
+# Variable: pep517_required_pkgs
 #
-# Certain Python packages require no-build-isolation and PEP 517 build system.
-# These are exception cases; The package cannot be built with the default build parameters and must be installed with
-# -no-build-isolation and -use-pep517 build options.
+# Purpose:
+#   Lists Python packages that require explicit use of the PEP 517 build backend
+#   and the --no-build-isolation option when being installed with pip.
+#
+# Background:
+#   These packages cannot be built using pip's default isolated build environment,
+#   either because:
+#     - They depend on system-level libraries already present in the runtime,
+#     - Their build backends are non-standard or rely on older setuptools behaviour,
+#     - They fail silently or partially when installed using pip's default build isolation.
+#
+# Behaviour:
+#   When installing these packages, pip must be instructed to:
+#     - Disable build isolation:      --no-build-isolation
+#     - Use the pyproject.toml backend: --use-pep517
+#
+# Usage:
+#   Referenced in conditional pip install logic to ensure these packages build correctly.
+#   Especially important when using virtual environments and building from source.
+#
+# Examples:
+#   - `pygobject` and `pycairo` require headers and introspection bindings from the OS
+#   - `psycopg2` must link against system PostgreSQL client libraries
+#
+# Notes:
+#   This list is version-sensitive and may change as upstream projects modernise their build systems.
+#--------------------------------------------------
+
 
 pep517_required_pkgs=(
   pygobject
@@ -429,6 +601,11 @@ pep517_required_pkgs=(
   pycurl
   cryptography
 )
+
+# ---------------------------------------------------
+# END INSTALLATION HELPER FUNCTIONS AND VARIABLE TABLES
+# ---------------------------------------------------
+
 
 #--------------------------------------------------
 # BEGIN INSTALLATION LOGIC
@@ -477,15 +654,14 @@ echo -e "     ${GREEN}OK${NC} Package index updated. Proceeding with the install
 
 
 #
-##
-###  WKHTMLTOPDF download links
+## WKHTMLTOPDF download links
 ## === Ubuntu Trusty x64 & x32 === (for other distributions please replace these two links,
 ## in order to have correct version of wkhtmltopdf installed, for a danger note refer to
 ## https://github.com/odoo/odoo/wiki/Wkhtmltopdf ):
 ## https://www.odoo.com/documentation/16.0/administration/install.html
 
 
-# Check if the operating system is Ubuntu 22.04
+# Check if the operating system is Ubuntu 22.04-24.04
 if [[ $(lsb_release -r -s) == "22.04" || $(lsb_release -r -s) == "23.04" || $(lsb_release -r -s) == "23.10" || $(lsb_release -r -s) == "24.04" ]]; then
   # Use manually downloaded .deb from GitHub because system packages don't support Qt WebKit rendering
     WKHTMLTOX_X64="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-1/wkhtmltox_0.12.6-1.stretch_amd64.deb"
@@ -599,10 +775,10 @@ fi
 #--------------------------------------------------
 # Install timezone management packages
 #--------------------------------------------------
-echo "---- Ensuring server timezone data is up-to-date"
+echo "---- Ensuring server timezone tools are installed"
 sudo apt-get install -y locales libc6 tzdata util-linux 1>/dev/null
 sudo dpkg-reconfigure --frontend noninteractive tzdata
-echo -e "     ${GREEN}OK${NC} Server timezone data is updated."
+echo -e "     ${GREEN}OK${NC} Server timezone tools are installed."
 
 if $PREHEAT_OS_ONLY; then
   echo -e "     ${YELLOW}NOTE${NC} Executed only operating system preheating. Skipping further installation steps. "
@@ -890,17 +1066,17 @@ fi
 
 echo -e "\n---- Installing pip into virtual environment"
 
-${OE_VENV}/bin/pip install --quiet --upgrade pip
+"${OE_VENV}/bin/python3" -m pip install --upgrade pip
 echo -e "\n---- Installing pip base tools"
 
 # Normally Odoo requirements include these Python tools, but due to version conflicts they need to be installed separately
 if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then  
   echo -e "     ${BLUE}INFO${NC} Installing system dependencies for pycairo and pygobject..."
 
-  # Install all needed system packages for gi and cairo (Ubuntu 22.04 & 24.04 compatible)
-  # This is needed because gi packages cannot be installed via pip and must be installed via apt
-  # for Python versions under 3.12. And Odoo 18+ requires gi and cairo bindings, but needs
-  # Python 3.10.
+  # These packages are required for Odoo 18+ with gi and cairo support.
+  # The gi module (GObject Introspection) and cairo bindings must be installed via APT
+  # because they are not pip-installable and are tied to system libraries.
+  # They target the system Python, so PYTHONPATH must be updated for virtual environments.
   sudo apt-get install -y --no-install-recommends \
     python3-gi python3-cairo \
     libcairo2-dev libgirepository1.0-dev libglib2.0-dev \
@@ -921,30 +1097,29 @@ if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
   echo "export PYTHONPATH=\"/usr/lib/python3/dist-packages:\$PYTHONPATH\"" >> ~/.bashrc
 
   # Install meson-python to venv
-  ${OE_VENV}/bin/pip install --quiet meson-python
+  "${OE_VENV}/bin/python3" -m pip install meson-python
   echo -e "     ${GREEN}OK${NC} Build environment prepared."
 
   # Test imports
   echo -e "     ${BLUE}Testing mesonpy and gi import...${NC}"
-  ${OE_VENV}/bin/python3 -c "import mesonpy; print('     \033[0;32mOK\033[0m. mesonpy module is present')" || echo -e "${RED}ERROR${NC}: mesonpy not found in venv"
+  PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH" ${OE_VENV}/bin/python3 -c "import mesonpy; print('     \033[0;32mOK\033[0m. mesonpy module is present')" || echo -e "${RED}ERROR${NC}: mesonpy not found in venv"
   PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH" ${OE_VENV}/bin/python3 -c "import gi; print('     \033[0;32mOK\033[0m. gi module is accessible')" || echo -e "${RED}ERROR${NC}: gi module not available"
 fi
+echo -e "     ${BLUE}DEBUG${NC} PYTHONPATH set as: ${YELLOW}$PYTHONPATH${NC}"
 
-
-
-${OE_VENV}/bin/pip install --quiet --upgrade setuptools wheel cython six requests 
+"${OE_VENV}/bin/python3" -m pip install --upgrade setuptools wheel cython six requests 
 
 # Zeep and friends is a requirement since Odoo 18, but it is not included in the requirements.txt for some reason.
 # In any case installing it does not mess up with anything.
 if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
   echo -e "     ${YELLOW}NOTE${NC} Installing zeep for Odoo 18+ ${OE_VERSION} support"
-  ${OE_VENV}/bin/pip install --quiet zeep defusedxml attrs cached-property isodate lxml platformdirs pytz requests-file requests-toolbelt
+  "${OE_VENV}/bin/python3" -m pip install zeep defusedxml attrs cached-property isodate lxml platformdirs pytz requests-file requests-toolbelt
 fi  
 
 echo -e "\n---- Reinstalling cffi in source mode to ensure _cffi_backend is available"
 ${OE_VENV}/bin/pip uninstall --yes cffi cryptography pycparser 1>/dev/null
-${OE_VENV}/bin/pip install --quiet --no-binary :all: cffi
-${OE_VENV}/bin/pip install --quiet cryptography pycparser
+"${OE_VENV}/bin/python3" -m pip install --no-binary :all: cffi
+"${OE_VENV}/bin/python3" -m pip install cryptography pycparser
 echo -e "     ${GREEN}OK${NC} cffi backend rebuilt successfully."
 echo -e "     cffi version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import cffi; print(cffi.__version__)')${NC}"
 echo -e "     cryptography version: ${YELLOW}$(${OE_VENV}/bin/python -c 'import cryptography; print(cryptography.__version__)')${NC}"
@@ -994,6 +1169,7 @@ check_pep517_required() {
 
 if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
   echo -e "     ${YELLOW}NOTE${NC} Installing Odoo 18+ ${OE_VERSION} undocumented dependencies"
+  echo -e "     DEBUG: Undocumented packages will be installed for version $OE_VERSION"
 
   for pkg in "${undocumented_odoo_requirements[@]}"; do
     import_name="${pip_import_map[$pkg]:-$pkg}"
@@ -1005,9 +1181,9 @@ if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
     # Build install command
     if [[ "$use_pep517" == "true" ]]; then
       echo -ne "${YELLOW}(uses pyproject.toml thus enabling --use-pep517)${NC} "
-      install_cmd="${OE_VENV}/bin/pip install --quiet --no-build-isolation --use-pep517 $pkg"
+      install_cmd=""${OE_VENV}/bin/python3" -m pip install --no-build-isolation --use-pep517 $pkg"
     else
-      install_cmd="${OE_VENV}/bin/pip install --quiet $pkg"
+      install_cmd=""${OE_VENV}/bin/python3" -m pip install $pkg"
     fi
 
     # Execute installation
@@ -1019,46 +1195,31 @@ if [[ "$OE_VERSION" == "18.0" || "$OE_VERSION" == "19.0" ]]; then
       echo -e "${GREEN}OK${NC}"
     fi
 
-    # Try multiple ways to get version
-version=$(${OE_VENV}/bin/python3 <<EOF
-import sys
-try:
-    import importlib.metadata
-    print(importlib.metadata.version('${pkg}'))
-except Exception:
-    try:
-        import ${import_name} as mod
-        for attr in ('__version__', 'VERSION'):
-            if hasattr(mod, attr):
-                print(getattr(mod, attr))
-                sys.exit(0)
-        if hasattr(mod, 'get_version'):
-            print(mod.get_version())
-        else:
-            raise Exception("No version info found")
-    except Exception:
-        try:
-            import pkg_resources
-            dist = pkg_resources.get_distribution('${pkg}')
-            print(dist.version)
-        except Exception:
-            print('not found')
-EOF
-)
+    # Get package version using custom function
 
-
-    version=$(echo "$version" | head -n1 | tr -d '\r')
+    version=$(get_python_package_version "$pkg" "$import_name" | head -n1 | tr -d '\r')
+    
+    # Fallback method if version was not found
+    if [[ -z "$version" ]]; then
+      version=$(${OE_VENV}/bin/python3 -c "import ${import_name}; print(${import_name}.__version__)" 2>/dev/null)
+    fi
 
     if [[ "$version" == "not found" || -z "$version" ]]; then
       echo -e "     ${YELLOW}Warning:${NC} Could not determine version for ${pkg}."
     else
       echo -e "     ${GREEN}OK${NC} ${pkg} version: ${YELLOW}${version}${NC}"
     fi
-done
+  done
+  # Check if Babel is correctly installed in the virtual environment
+  echo -n "     DEBUG: Executing litmus test for babel import and version ... "
+  if ${OE_VENV}/bin/python3 -c "import babel; print(babel.__version__)" >/dev/null 2>&1; then
+    babel_version=$(${OE_VENV}/bin/python3 -c "import babel; print(babel.__version__)")
+    echo -e "${GREEN}OK${NC} version ${YELLOW}${babel_version}${NC}"
+  else
+    echo -e "${RED}FAILED${NC} - babel module not found in venv!"
+  fi
 
-  
-
-
+fi
 
 
 # Version-specific handling for setuptools, greenlet, gevent and zope.event
@@ -1088,44 +1249,91 @@ if [[ "$OE_VERSION" =~ ^(18.0|17.0|16.0|15.0)$ ]]; then
       ;;
   esac
 
-  # Install version-matched base packages
-  ${OE_VENV}/bin/pip install --quiet "setuptools==${SETUPTOOLS_VERSION}"
-  ${OE_VENV}/bin/pip install --quiet --no-build-isolation "greenlet==${GREENLET_VERSION}" "gevent==${GEVENT_VERSION}" "zope.event==${ZOPE_EVENT_VERSION}"
+  # Install version-matched base packages for Odoo ${OE_VERSION}
+  echo -e "\n---- Installing setuptools, greenlet, gevent and zope.event for Odoo ${OE_VERSION}"
+  "${OE_VENV}/bin/python3" -m pip install "setuptools==${SETUPTOOLS_VERSION}"
+  "${OE_VENV}/bin/python3" -m pip install --no-build-isolation \
+    "greenlet==${GREENLET_VERSION}" \
+    "gevent==${GEVENT_VERSION}" \
+    "zope.event==${ZOPE_EVENT_VERSION}"
 
+  # Install remaining pip requirements in bulk (except gevent and greenlet)
   echo -e "\n---- Installing remaining pip requirements from Odoo ${OE_VERSION} requirements.txt"
 
-  # Download and filter requirements.txt, removing greenlet and gevent
   REQ_URL="https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt"
   REQ_CLEANED="/tmp/requirements-cleaned.txt"
+  PIP_WARN_LOG="/tmp/pip_warnings.log"
+
+  # Download and remove gevent and greenlet (they are already installed)
   curl -sSL "$REQ_URL" | grep -v -E '^(gevent|greenlet)([>=<].*)?$' > "$REQ_CLEANED"
 
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    pkg=$(echo "$line" | sed 's/#.*//' | xargs)
-    [[ -z "$pkg" ]] && continue
+  # Clean previous log if any
+  rm -f "$PIP_WARN_LOG"
 
-    echo -ne "     Installing ${YELLOW}${pkg}${NC} ... "
+  # Run pip and capture only stderr to warning log
+  if "${OE_VENV}/bin/python3" -m pip install -r "$REQ_CLEANED" 2> "$PIP_WARN_LOG"; then
+    echo -e "     ${GREEN}OK${NC} All remaining requirements installed successfully."
+  else
+    echo -e "     ${RED}ERROR${NC} Some packages failed to install from requirements.txt."
+    echo -e "     Review output above or check ${YELLOW}$REQ_CLEANED${NC}."
+  fi
 
-    read -r use_pep517 pep517_reason < <(check_pep517_required "$pkg")
+  # Check for deprecation warnings
+  if grep -q "DeprecationWarning" "$PIP_WARN_LOG"; then
+    echo -e "\n${YELLOW}WARNING:${NC} Detected deprecation warnings during pip install:"
+    grep "DeprecationWarning" "$PIP_WARN_LOG" | cut -d':' -f1-2 | sort -u | while read -r line; do
+      echo -e "  - ${YELLOW}${line}${NC}"
+    done
+    echo -e "You may want to review ${YELLOW}$PIP_WARN_LOG${NC} for full details."
+  fi
 
-    if [[ "$use_pep517" == "true" ]]; then
-      echo -ne "${YELLOW}(uses pyproject.toml; enabling --use-pep517)${NC} "
-      install_cmd="${OE_VENV}/bin/pip install --quiet --no-build-isolation --use-pep517 $pkg"
-    else
-      install_cmd="${OE_VENV}/bin/pip install --quiet $pkg"
-    fi
-
-    if ! eval "$install_cmd"; then
-      echo -e "${RED}FAILED${NC}"
-    else
-      echo -e "${GREEN}OK${NC}"
-    fi
-  done < "$REQ_CLEANED"
 
 else
   echo -e "\n---- Installing pip requirements from Odoo ${OE_VERSION} requirements.txt (standard installation)"
-  ${OE_VENV}/bin/pip install --quiet -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
-  ${OE_VENV}/bin/pip install --quiet gevent greenlet zope.event
+  "PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH" ${OE_VENV}/bin/python3" -m pip install -r https://github.com/odoo/odoo/raw/${OE_VERSION}/requirements.txt
+  "PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH" ${OE_VENV}/bin/python3" -m pip install gevent greenlet zope.event
 fi
+
+echo -n "     DEBUG: Executing litmus test for babel import and version after requirements.txt installation... "
+if ${OE_VENV}/bin/python3 -c "import babel; print(babel.__version__)" >/dev/null 2>&1; then
+  babel_version=$(${OE_VENV}/bin/python3 -c "import babel; print(babel.__version__)")
+  echo -e "${GREEN}OK${NC} version ${YELLOW}${babel_version}${NC}"
+else
+  echo -e "${RED}FAILED${NC} - babel module not found in venv!"
+fi
+
+echo -e "\n${BLUE}INFO${NC} Verifying installed versions of required Python packages..."
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+  # Extract the package name by removing version specifiers, conditions, and comments
+  pkg=$(echo "$line" | sed 's/[=<>; ].*//' | xargs)
+  [[ -z "$pkg" ]] && continue
+
+  # Use import name mapping if defined, otherwise fall back to package name
+  if [[ -n "${module_import_map[$pkg]}" ]]; then
+    import_name="${module_import_map[$pkg]}"
+  else
+    import_name="$pkg"
+  fi
+
+  version=$(${OE_VENV}/bin/python3 <<EOF
+try:
+    import $import_name as mod
+    for attr in ('__version__', 'VERSION'):
+        if hasattr(mod, attr):
+            print(getattr(mod, attr))
+            break
+    else:
+        print("unknown")
+except ImportError:
+    print("not found")
+EOF
+)
+  printf "  %-24s %s\n" "$pkg:" "$version"
+done < "$REQ_CLEANED"
+
+echo -e "\n     ${GREEN}OK${NC} Verified installed Python packages in virtual environment"
+
 
 # Double check that critical versions were not overwritten
 echo -e "\n---- Double-checking setuptools, gevent, and greenlet versions"
@@ -1150,33 +1358,33 @@ case "$OE_VERSION" in
 esac
 
 # Verify setuptools
-echo -e "\n---- Verifying setuptools installation"
+echo -e "\n     Verifying setuptools installation"
 SETUPTOOLS_VERSION=$(${OE_VENV}/bin/python3 -m pip show setuptools 2>/dev/null | grep ^Version | awk '{print $2}')
 if [[ "$SETUPTOOLS_VERSION" != "$EXPECTED_SETUPTOOLS" && -n "$EXPECTED_SETUPTOOLS" ]]; then
   echo -e "     ${YELLOW}WARNING${NC}: setuptools version is ${SETUPTOOLS_VERSION:-not installed}, expected ${EXPECTED_SETUPTOOLS}. Reinstalling..."
-  ${OE_VENV}/bin/pip install --quiet "setuptools==${EXPECTED_SETUPTOOLS}"
+  "${OE_VENV}/bin/python3" -m pip install "setuptools==${EXPECTED_SETUPTOOLS}"
   echo -e "     ${GREEN}OK${NC} setuptools corrected to ${EXPECTED_SETUPTOOLS}."
 else
   echo -e "     ${GREEN}OK${NC} setuptools version is ${SETUPTOOLS_VERSION}."
 fi
 
 # Verify gevent
-echo -e "\n---- Verifying gevent installation"
+echo -e "\n     Verifying gevent installation"
 GEVENT_VERSION=$(${OE_VENV}/bin/python3 -m pip show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
 if [[ "$GEVENT_VERSION" != "$EXPECTED_GEVENT" && -n "$EXPECTED_GEVENT" ]]; then
   echo -e "     ${YELLOW}WARNING${NC}: gevent version is ${GEVENT_VERSION:-not installed}, expected ${EXPECTED_GEVENT}. Reinstalling..."
-  ${OE_VENV}/bin/pip install --quiet --no-build-isolation "gevent==${EXPECTED_GEVENT}" "greenlet==${EXPECTED_GREENLET}"
+  "${OE_VENV}/bin/python3" -m pip install --no-build-isolation "gevent==${EXPECTED_GEVENT}" "greenlet==${EXPECTED_GREENLET}"
   echo -e "     ${GREEN}OK${NC} gevent and greenlet corrected to expected versions."
 else
   echo -e "     ${GREEN}OK${NC} gevent version is ${GEVENT_VERSION}."
 fi
 
 # Verify greenlet
-echo -e "\n---- Verifying greenlet installation"
+echo -e "\n     Verifying greenlet installation"
 GREENLET_VERSION=$(${OE_VENV}/bin/python3 -m pip show greenlet 2>/dev/null | grep ^Version | awk '{print $2}')
 if [[ "$GREENLET_VERSION" != "$EXPECTED_GREENLET" && -n "$EXPECTED_GREENLET" ]]; then
   echo -e "     ${YELLOW}WARNING${NC}: greenlet version is ${GREENLET_VERSION:-not installed}, expected ${EXPECTED_GREENLET}. Reinstalling..."
-  ${OE_VENV}/bin/pip install --quiet --no-build-isolation "greenlet==${EXPECTED_GREENLET}" "gevent==${EXPECTED_GEVENT}"
+  "${OE_VENV}/bin/python3" -m pip install --no-build-isolation "greenlet==${EXPECTED_GREENLET}" "gevent==${EXPECTED_GEVENT}"
   echo -e "     ${GREEN}OK${NC} greenlet and gevent corrected to expected versions."
 else
   echo -e "     ${GREEN}OK${NC} greenlet version is ${GREENLET_VERSION}."
@@ -1184,10 +1392,10 @@ fi
 
 
 # Verify psycopg2
-echo -e "\n---- Verifying psycopg2 installation"
+echo -e "\n     Verifying psycopg2 installation"
 if ! ${OE_VENV}/bin/python3 -c "import psycopg2" &>/dev/null; then
   echo -e "     ${YELLOW}WARNING${NC}: psycopg2 missing, installing manually..."
-  ${OE_VENV}/bin/pip install --quiet --use-pep517 --no-build-isolation psycopg2
+  "${OE_VENV}/bin/python3" -m pip install --use-pep517 --no-build-isolation psycopg2
   echo -e "     ${GREEN}OK${NC} psycopg2 installed manually."
 else
   echo -e "     ${GREEN}OK${NC} psycopg2 already installed."
@@ -1203,7 +1411,7 @@ echo -e "     ${BLUE}setuptools${NC} version: ${YELLOW}${SETUPTOOLS_VERSION}${NC
 GEVENT_VERSION=$(${OE_VENV}/bin/pip show gevent 2>/dev/null | grep ^Version | awk '{print $2}')
 echo -e "     ${BLUE}gevent${NC}    version: ${YELLOW}${GEVENT_VERSION}${NC}"
 echo -e "     ${GREEN}OK${NC} gevent is installed and ready for workers mode."
-${OE_VENV}/bin/python3 -c "import zope.event; print('     \033[0;32mOK\033[0m. zope.event confirmed')"
+PYTHONPATH="/usr/lib/python3/dist-packages:$PYTHONPATH" ${OE_VENV}/bin/python3 -c "import zope.event; print('     \033[0;32mOK\033[0m. zope.event confirmed')"
 
 echo -e "\n---- Installing ${BLUE}NodeJS, NPM${NC}, ${BLUE}rtlcss${NC} and ${BLUE}node-gyp${NC} for frontend and build tool support"
 sudo apt-get install -y nodejs npm 1>/dev/null
@@ -1246,7 +1454,8 @@ if [ "$INSTALL_WKHTMLTOPDF" = "True" ]; then
       OS_CODENAME="$RAW_CODENAME"
       ;;
     *)
-      echo -e "     ${YELLOW}WARNING${NC}: Codename '${RAW_CODENAME}' not supported by wkhtmltopdf packages. Falling back to 'jammy' (Ubuntu 22.04 LTS) version."
+      echo -e "     ${YELLOW}NOTE${NC}: Codename '${RAW_CODENAME}' not supported by wkhtmltopdf packages."
+      echo -e "     Falling back to 'jammy' (Ubuntu 22.04 LTS) version."
       OS_CODENAME="jammy"
       ;;
   esac
@@ -1426,8 +1635,6 @@ sudo chown $OE_USER:$OE_USER /etc/${OE_CONFIG}.conf
 sudo chmod 640 /etc/${OE_CONFIG}.conf
 
 echo -e "     ${GREEN}OK${NC} Configuration file created at ${BLUE}/etc/${OE_CONFIG}.conf${NC}."
-#echo -e "\n---- Initializing database with base module"
-#sudo -u ${OE_USER} ${OE_VENV}/bin/python3 ${OE_HOME}/odoo-bin -d ${OE_DB_NAME} -i base --config=/etc/${OE_CONFIG}.conf --without-demo=all --stop-after-init
 
 #--------------------------------------------------
 # Install Nginx per user's selection
@@ -1592,7 +1799,14 @@ else
   fi
 fi
 
-echo -e "     ${BLUE}INFO.${NC} Creating systemd service file for Odoo"
+#--------------------------------------------------
+# Create systemd service file for Odoo
+#--------------------------------------------------
+
+echo -e "     ${BLUE}INFO${NC} Creating systemd service file for Odoo"
+
+# Set PYTHONPATH explicitly for systemd to find system gi/cairo modules
+PYTHONPATH_LINE="Environment=PYTHONPATH=/usr/lib/python3/dist-packages"
 
 cat <<EOF | sudo tee /etc/systemd/system/$OE_CONFIG.service > /dev/null
 [Unit]
@@ -1604,6 +1818,7 @@ After=network.target postgresql.service
 Type=simple
 User=$OE_USER
 Group=$OE_USER
+$PYTHONPATH_LINE
 ExecStart=${OE_VENV}/bin/python3 ${OE_HOME_EXT}/odoo-bin --config=/etc/${OE_CONFIG}.conf
 StandardOutput=journal
 StandardError=journal
@@ -1614,14 +1829,38 @@ SyslogIdentifier=odoo
 WantedBy=multi-user.target
 EOF
 
+echo -e "     ${GREEN}OK${NC} Systemd service file created at ${BLUE}/etc/systemd/system/$OE_CONFIG.service${NC}."
+
+echo -e "     ${BLUE}INFO${NC} Starting Odoo Service"
+
+
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
 sudo systemctl enable $OE_CONFIG
+echo -e "     ${BLUE}INFO${NC} Verifying that PYTHONPATH is correctly set in systemd service environment..."
+
+# Print the systemd environment variable for the Odoo service
+PY_ENVIRONMENT=$(systemctl show "${OE_CONFIG}.service" | grep ^Environment=)
+
+if [[ "$PY_ENVIRONMENT" == *"PYTHONPATH=/usr/lib/python3/dist-packages"* ]]; then
+  echo -e "     ${GREEN}OK${NC} PYTHONPATH correctly set in systemd: ${YELLOW}${PY_ENVIRONMENT}${NC}"
+else
+  echo -e "     ${RED}ERROR${NC} PYTHONPATH is missing or incorrect in systemd environment:"
+  echo -e "     ${RED}$PY_ENVIRONMENT${NC}"
+  echo -e "     ${RED}You may need to restart the daemon or inspect the service file manually.${NC}"
+fi
+
+
+
 sudo systemctl start $OE_CONFIG
-
-echo -e "     ${BLUE}INFO.${NC} Starting Odoo Service"
-
-echo -e "     ${BLUE}INFO.${NC} Waiting for Odoo to start and listen listening on port $OE_PORT"
+if sudo systemctl is-active --quiet $OE_CONFIG; then
+    echo -e "     ${GREEN}OK${NC} Odoo service started successfully."
+else
+    echo -e "     ${RED}ERROR${NC} Failed to start Odoo service. Please check the logs at /var/log/${OE_USER}/${OE_CONFIG}.log :"
+    sudo cat /var/log/${OE_USER}/${OE_CONFIG}.log
+    exit 1
+fi
+echo -e "     ${BLUE}INFO${NC} Verifying that Odoo has started and is listening on port $OE_PORT"
 
 # Wait for Odoo to start and listen on the desired port
 for i in {1..5}; do
